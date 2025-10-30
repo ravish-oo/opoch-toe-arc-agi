@@ -12,7 +12,7 @@ If any step cannot be satisfied without breaking anchors, stop and return a shor
 
 
 # For aligning claude code later
- now i want u to read @docs/anchors/01-engineering-spec.md @docs/anchors/02-locks-and-minispecs.md and see how the maths is merged with engg such that, in this 
+ now i want u to read @docs/anchors/00-math-spec.md @docs/anchors/01-engineering-spec.md @docs/anchors/02-locks-and-minispecs.md and see how the maths is merged with engg such that, in this 
 design, engineering = math. The program is the proof.. 
 No hit and trial remains:
 Truth is forced: PT splits only by input-legal predicates in fixed order.

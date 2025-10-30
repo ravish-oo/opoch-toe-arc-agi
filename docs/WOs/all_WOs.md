@@ -30,14 +30,14 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Reviewer produces:** proofs logged; cap enforced; negative tests where non-preserving D4 is rejected.
 **Done when:** receipts list admitted views with proof_ok=true; closure bounds honored.
 
-# WO-04 — Residue-k periods
+# WO-04 — Residue-k periods ✅ COMPLETE
 
 **Goal:** handle general mosaic/stripe/weave.
 **Scope:** per-row and per-col minimal period; axis-wise gcd (skip all-constant lines); admit residue-k shift views; closure integrate.
 **Reviewer produces:** period-k goldens (k=3,4); tests that parity-only fails but residue-k passes.
 **Done when:** admitted residue views appear in receipts; period goldens pass.
 
-# WO-05 — Components as S-views and PT predicates
+# WO-05 — Components as S-views and PT predicates ✅ COMPLETE
 
 **Goal:** region structure without heuristics.
 **Scope:** 4-connected components by input color on presented test input; identity S-view with domain=component; export masks for PT.

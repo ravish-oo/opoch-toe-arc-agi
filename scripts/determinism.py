@@ -53,6 +53,12 @@ def run_harness(task_id: str, selfcheck: str) -> tuple[str, dict]:
         morphisms.init()
         os.environ["ARC_SELF_CHECK"] = "1"
         sviews.init()
+    elif selfcheck == "components":
+        import morphisms
+        import components
+        morphisms.init()
+        os.environ["ARC_SELF_CHECK"] = "1"
+        components.init()
 
     doc = receipts.finalize()
     hash_val = receipts.hash_receipts(doc)
@@ -79,7 +85,7 @@ def main():
 
     for i in range(args.runs):
         # Clear modules to get fresh import
-        modules_to_clear = ['receipts', 'morphisms', 'present', 'sviews']
+        modules_to_clear = ['receipts', 'morphisms', 'present', 'sviews', 'components']
         for mod in modules_to_clear:
             if mod in sys.modules:
                 del sys.modules[mod]
