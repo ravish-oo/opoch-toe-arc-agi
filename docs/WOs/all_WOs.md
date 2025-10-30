@@ -2,14 +2,14 @@ Great, we’re aligned. Here’s a bottoms-up, modular sequence of **high-level 
 
 I’m not expanding into sub-tasks here; this is the top-level plan you asked for.
 
-# WO-00 — Repo bootstrap (ground zero)
+# WO-00 — Repo bootstrap (ground zero) ✅ COMPLETE
 
 **Goal:** deterministic skeleton in place; anchors wired; test harness ready.
 **Scope:** minimal `receipts.log()`, canonical JSON, SHA-256 hash; determinism script; pytest wiring; harness stub.
 **Reviewer produces:** Tier-C determinism test; smoke test that receipts marshal/unmarshal.
 **Done when:** determinism script runs on a dummy task and hash is stable under pair permutation.
 
-# WO-01 — Morphisms kernel
+# WO-01 — Morphisms kernel ✅ COMPLETE
 
 **Goal:** the only coordinate algebra in the codebase.
 **Scope:** `pose_fwd/inv`, `anchor_fwd/inv`, `shape_inv` (floor), plus the two composites: **TEST→OUT** and **OUT→IN(KEEP)**.

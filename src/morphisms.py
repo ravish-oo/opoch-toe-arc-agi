@@ -437,6 +437,10 @@ def init() -> None:
 
     Raises:
         AssertionError: If any identity check fails
+
+    Notes:
+        - Called by harness, not on import
+        - Assumes receipts.init() has been called
     """
     receipt = _self_check()
 
@@ -464,7 +468,3 @@ def init() -> None:
             f"morphisms identity failed: pullback law={ex.get('law')} "
             f"p_out={ex.get('p_out')} got={ex.get('got')} want={ex.get('want')}"
         )
-
-
-# Run self-check on module import
-init()
