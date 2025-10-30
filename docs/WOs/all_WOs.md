@@ -16,7 +16,7 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Reviewer produces:** property tests for I-2 identities; round-trip path checks across random shapes.
 **Done when:** all morphism properties green.
 
-# WO-02 — Projector Π (present / un-present)
+# WO-02 — Projector Π (present / un-present) ✅ COMPLETE
 
 **Goal:** idempotent normalization; exact inverse.
 **Scope:** palette canon (inputs-only), D4 lex pose, anchor inputs+test; outputs pose-only; exact un-present; receipts “present”.

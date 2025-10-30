@@ -42,6 +42,11 @@ def run_harness(task_id: str, selfcheck: str) -> tuple[str, dict]:
     if selfcheck == "morphisms":
         import morphisms
         morphisms.init()
+    elif selfcheck == "present":
+        import morphisms
+        import present
+        morphisms.init()
+        present.init()
 
     doc = receipts.finalize()
     hash_val = receipts.hash_receipts(doc)
@@ -68,7 +73,7 @@ def main():
 
     for i in range(args.runs):
         # Clear modules to get fresh import
-        modules_to_clear = ['receipts', 'morphisms']
+        modules_to_clear = ['receipts', 'morphisms', 'present']
         for mod in modules_to_clear:
             if mod in sys.modules:
                 del sys.modules[mod]

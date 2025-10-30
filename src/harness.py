@@ -26,7 +26,7 @@ def main():
     parser.add_argument(
         "--selfcheck",
         type=str,
-        choices=["morphisms"],
+        choices=["morphisms", "present"],
         help="Module to self-check"
     )
     parser.add_argument(
@@ -53,6 +53,13 @@ def main():
         import morphisms
         morphisms.init()
         print(f"✓ morphisms self-check passed")
+    elif args.selfcheck == "present":
+        import morphisms
+        import present
+        morphisms.init()
+        present.init()
+        print(f"✓ morphisms self-check passed")
+        print(f"✓ present self-check passed")
 
     # Finalize and print
     doc = receipts.finalize()
