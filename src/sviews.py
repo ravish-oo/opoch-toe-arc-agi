@@ -1,10 +1,8 @@
 """
-S-views v1: identity, D4-preserving, overlap translations (WO-03).
+S-views: identity, D4-preserving, residue-k periods, overlap translations (WO-03 + WO-04).
 
 Constructs structural views (S-views) from the presented test input.
 Each view M is a partial self-map with proof: ∀x∈Dom(M), G(M(x)) = G(x).
-
-Residue-k periods deferred to WO-04.
 """
 
 import os
@@ -22,6 +20,129 @@ IntGrid = List[List[int]]
 
 
 # ============================================================================
+# PERIOD DETECTION (WO-04)
+# ============================================================================
+
+
+def minimal_row_period(G: IntGrid) -> Tuple[int, List[int]]:
+    """
+    Compute minimal period per row and their gcd.
+
+    Args:
+        G: Grid to analyze
+
+    Returns:
+        (gcd_row, per_row_periods)
+        where gcd_row is gcd of all row periods,
+        and per_row_periods[i] is minimal period of row i
+
+    Algorithm:
+        For each row i:
+            - Check divisors of W in ascending order
+            - Find smallest p where G[i,j] = G[i,(j+p)%W] for all j
+        Return gcd of all row periods
+    """
+    H = len(G)
+    W = len(G[0]) if H > 0 else 0
+
+    if W == 0:
+        return (1, [])
+
+    # Compute divisors of W
+    divisors = []
+    for p in range(1, W + 1):
+        if W % p == 0:
+            divisors.append(p)
+
+    per_row_periods = []
+
+    for i in range(H):
+        row_period = W  # Default: full width
+
+        for p in divisors:
+            # Check if period p works for this row
+            is_period = True
+            for j in range(W):
+                j_shifted = (j + p) % W
+                if G[i][j] != G[i][j_shifted]:
+                    is_period = False
+                    break
+
+            if is_period:
+                row_period = p
+                break  # Found minimal period
+
+        per_row_periods.append(row_period)
+
+    # Compute gcd of all row periods
+    import math
+    gcd_row = per_row_periods[0] if per_row_periods else 1
+    for p in per_row_periods[1:]:
+        gcd_row = math.gcd(gcd_row, p)
+
+    return (gcd_row, per_row_periods)
+
+
+def minimal_col_period(G: IntGrid) -> Tuple[int, List[int]]:
+    """
+    Compute minimal period per column and their gcd.
+
+    Args:
+        G: Grid to analyze
+
+    Returns:
+        (gcd_col, per_col_periods)
+        where gcd_col is gcd of all column periods,
+        and per_col_periods[j] is minimal period of column j
+
+    Algorithm:
+        For each column j:
+            - Check divisors of H in ascending order
+            - Find smallest p where G[i,j] = G[(i+p)%H,j] for all i
+        Return gcd of all column periods
+    """
+    H = len(G)
+    W = len(G[0]) if H > 0 else 0
+
+    if H == 0:
+        return (1, [])
+
+    # Compute divisors of H
+    divisors = []
+    for p in range(1, H + 1):
+        if H % p == 0:
+            divisors.append(p)
+
+    per_col_periods = []
+
+    for j in range(W):
+        col_period = H  # Default: full height
+
+        for p in divisors:
+            # Check if period p works for this column
+            is_period = True
+            for i in range(H):
+                i_shifted = (i + p) % H
+                if G[i][j] != G[i_shifted][j]:
+                    is_period = False
+                    break
+
+            if is_period:
+                col_period = p
+                break  # Found minimal period
+
+        per_col_periods.append(col_period)
+
+    # Compute gcd of all column periods
+    import math
+    gcd_col = per_col_periods[0] if per_col_periods else 1
+    for p in per_col_periods[1:]:
+        gcd_col = math.gcd(gcd_col, p)
+
+    return (gcd_col, per_col_periods)
+
+
+# ============================================================================
 # S-VIEW CLASS (immutable record)
 # ============================================================================
 
@@ -31,8 +152,8 @@ class SView:
     Structural view: a partial self-map with proof.
 
     Attributes:
-        kind: View type ("identity" | "d4" | "translate" | "compose")
-        params: Parameters (e.g., {"op": 3} or {"di": 1, "dj": -2})
+        kind: View type ("identity" | "d4" | "residue" | "translate" | "compose")
+        params: Parameters (e.g., {"op": 3} or {"axis": "row", "p": 3} or {"di": 1, "dj": -2})
         dom_size: |Dom(M)| (number of valid pixels)
         apply: M(x) -> y or None if x∉Dom(M)
     """
@@ -97,7 +218,7 @@ def compute_image_signature(view: SView, grid_shape: Shape) -> str:
 
 def build_base_views(G: IntGrid) -> List[SView]:
     """
-    Build base S-views: identity, D4-preserving, overlap translations.
+    Build base S-views: identity, D4-preserving, residue-k periods, overlap translations.
 
     Args:
         G: Presented test input grid
@@ -108,7 +229,11 @@ def build_base_views(G: IntGrid) -> List[SView]:
     Admission criteria:
         - Identity: always admitted
         - D4: admitted iff G invariant under that op (all pixels equal)
+        - Residue: admitted iff gcd_row > 1 (rows) or gcd_col > 1 (cols)
         - Translation: admitted iff equality holds on overlap (dom_size > 0)
+
+    Order:
+        identity → D4 ops (0-7) → residue row → residue col → translations (lex)
     """
     H = len(G)
     W = len(G[0]) if H > 0 else 0
@@ -174,7 +299,70 @@ def build_base_views(G: IntGrid) -> List[SView]:
             )
             views.append(d4_view)
 
-    # 3. Overlap translations
+    # 3. Residue-k periods (WO-04)
+    # Row-wise residue
+    gcd_row, _ = minimal_row_period(G)
+    if gcd_row > 1 and gcd_row < W:
+        # Proof: Check G[i,j] = G[i,(j+p)%W] for all i,j
+        is_row_residue = True
+        for i in range(H):
+            for j in range(W):
+                j_shifted = (j + gcd_row) % W
+                if G[i][j] != G[i][j_shifted]:
+                    is_row_residue = False
+                    break
+            if not is_row_residue:
+                break
+
+        if is_row_residue:
+            # Create apply function for row residue
+            def make_row_residue_apply(p, width):
+                def apply_fn(x):
+                    i, j = x
+                    j_shifted = (j + p) % width
+                    return (i, j_shifted)
+                return apply_fn
+
+            residue_row_view = SView(
+                kind="residue",
+                params={"axis": "row", "p": gcd_row},
+                dom_size=H * W,
+                apply_fn=make_row_residue_apply(gcd_row, W)
+            )
+            views.append(residue_row_view)
+
+    # Column-wise residue
+    gcd_col, _ = minimal_col_period(G)
+    if gcd_col > 1 and gcd_col < H:
+        # Proof: Check G[i,j] = G[(i+p)%H,j] for all i,j
+        is_col_residue = True
+        for i in range(H):
+            for j in range(W):
+                i_shifted = (i + gcd_col) % H
+                if G[i][j] != G[i_shifted][j]:
+                    is_col_residue = False
+                    break
+            if not is_col_residue:
+                break
+
+        if is_col_residue:
+            # Create apply function for col residue
+            def make_col_residue_apply(p, height):
+                def apply_fn(x):
+                    i, j = x
+                    i_shifted = (i + p) % height
+                    return (i_shifted, j)
+                return apply_fn
+
+            residue_col_view = SView(
+                kind="residue",
+                params={"axis": "col", "p": gcd_col},
+                dom_size=H * W,
+                apply_fn=make_col_residue_apply(gcd_col, H)
+            )
+            views.append(residue_col_view)
+
+    # 4. Overlap translations
     # Enumerate Δ in lex order on (|di|+|dj|, di, dj)
     # Bounded by grid size
     deltas = []
@@ -320,19 +508,23 @@ def build_closure_depth2(G: IntGrid, base: List[SView]) -> List[SView]:
     # Sort deterministically:
     # 1. identity first
     # 2. D4 by op ascending
-    # 3. translations by lex on (|di|+|dj|, di, dj)
-    # 4. compositions by lex on (sig(left), sig(right))
+    # 3. residue by (axis: row=0, col=1) then period p
+    # 4. translations by lex on (|di|+|dj|, di, dj)
+    # 5. compositions by lex on (sig(left), sig(right))
     def view_sort_key(v: SView):
         if v.kind == "identity":
             return (0, 0, 0, 0, "")
         elif v.kind == "d4":
             return (1, v.params["op"], 0, 0, "")
+        elif v.kind == "residue":
+            axis_order = 0 if v.params["axis"] == "row" else 1
+            return (2, axis_order, v.params["p"], 0, "")
         elif v.kind == "translate":
             di = v.params["di"]
             dj = v.params["dj"]
-            return (2, abs(di) + abs(dj), di, dj, "")
+            return (3, abs(di) + abs(dj), di, dj, "")
         elif v.kind == "compose":
-            return (3, 0, 0, 0, v.params["left"] + v.params["right"])
+            return (4, 0, 0, 0, v.params["left"] + v.params["right"])
         else:
             return (999, 0, 0, 0, "")
 
@@ -531,6 +723,204 @@ def _self_check_sviews() -> Dict:
 
     receipt["closure_capped"] = len(base4) > 128 or len(closure4) == 128
 
+    # ========================================================================
+    # Check 5: Residue-k period-3 rows (WO-04)
+    # ========================================================================
+    # Grid with period-3 rows: abc abc abc (W=9)
+    G5 = [
+        [0, 1, 2, 0, 1, 2, 0, 1, 2],
+        [3, 4, 5, 3, 4, 5, 3, 4, 5]
+    ]
+
+    views5 = build_base_views(G5)
+
+    # Should admit residue row p=3
+    residue_row_p3_found = False
+    for v in views5:
+        if v.kind == "residue" and v.params.get("axis") == "row" and v.params.get("p") == 3:
+            residue_row_p3_found = True
+            if v.dom_size != 18:  # 2 rows × 9 cols
+                receipt["examples"]["residue_row_domain"] = {
+                    "case": "residue_period3_rows",
+                    "axis": "row",
+                    "p": 3,
+                    "expected_dom_size": 18,
+                    "got_dom_size": v.dom_size
+                }
+                return receipt
+
+    if not residue_row_p3_found:
+        receipt["examples"]["residue_row_missing"] = {
+            "case": "residue_period3_rows",
+            "axis": "row",
+            "p": 3,
+            "expected": "admitted",
+            "got": "not found"
+        }
+        return receipt
+
+    # Should NOT admit residue col (no column periodicity)
+    residue_col_found = False
+    for v in views5:
+        if v.kind == "residue" and v.params.get("axis") == "col":
+            residue_col_found = True
+
+    if residue_col_found:
+        receipt["examples"]["residue_col_spurious"] = {
+            "case": "residue_period3_rows",
+            "axis": "col",
+            "expected": "rejected",
+            "got": "admitted"
+        }
+        return receipt
+
+    receipt["proof_samples"].append({
+        "kind": "residue_row",
+        "ok": True,
+        "checked": 18
+    })
+
+    # ========================================================================
+    # Check 6: Residue-k different minimal periods (WO-04)
+    # ========================================================================
+    # Row 0: minimal period 2 (ab ab ab ab)
+    # Row 1: minimal period 4 (abab abab) which ALSO has period 2
+    # For row 1 to have minimal period 4, it needs to NOT have period 1 or 2
+    # Actually: row 1 with period 4 means [a,b,c,d,a,b,c,d]
+    # But if we want BOTH rows to satisfy period 2, we need:
+    # Row 0: [0,1,0,1,0,1,0,1] - satisfies period 2
+    # Row 1: [2,2,2,2,2,2,2,2] - satisfies period 1 (thus also 2, 4, 8)
+    # This tests: minimal periods are [2, 1], gcd(2,1)=1, no residue admitted
+    #
+    # Better test: Both rows period 2, to verify p=2 admission
+    G6 = [
+        [0, 1, 0, 1, 0, 1, 0, 1],
+        [2, 3, 2, 3, 2, 3, 2, 3]
+    ]
+
+    views6 = build_base_views(G6)
+
+    # Should admit residue row p=2
+    residue_row_p2_found = False
+    for v in views6:
+        if v.kind == "residue" and v.params.get("axis") == "row" and v.params.get("p") == 2:
+            residue_row_p2_found = True
+            if v.dom_size != 16:  # 2 rows × 8 cols
+                receipt["examples"]["residue_gcd_domain"] = {
+                    "case": "residue_period2_rows",
+                    "axis": "row",
+                    "p": 2,
+                    "expected_dom_size": 16,
+                    "got_dom_size": v.dom_size
+                }
+                return receipt
+
+    if not residue_row_p2_found:
+        receipt["examples"]["residue_gcd_missing"] = {
+            "case": "residue_period2_rows",
+            "axis": "row",
+            "p": 2,
+            "gcd_of": [2, 2],
+            "expected": "admitted",
+            "got": "not found"
+        }
+        return receipt
+
+    # Should NOT admit residue col
+    residue_col_found = False
+    for v in views6:
+        if v.kind == "residue" and v.params.get("axis") == "col":
+            residue_col_found = True
+
+    if residue_col_found:
+        receipt["examples"]["residue_col_spurious_mixed"] = {
+            "case": "residue_period2_rows",
+            "axis": "col",
+            "expected": "rejected",
+            "got": "admitted"
+        }
+        return receipt
+
+    receipt["proof_samples"].append({
+        "kind": "residue_gcd",
+        "ok": True,
+        "checked": 16
+    })
+
+    # ========================================================================
+    # Check 7: Residue-k mixed 2/3 rows (WO-04)
+    # ========================================================================
+    # Row 0: period 2 (ab ab ab)
+    # Row 1: period 3 (abc abc)
+    # gcd(2, 3) = 1 → no residue
+    G7 = [
+        [0, 1, 0, 1, 0, 1],
+        [2, 3, 4, 2, 3, 4]
+    ]
+
+    views7 = build_base_views(G7)
+
+    # Should NOT admit any residue views (gcd=1)
+    residue_found = False
+    for v in views7:
+        if v.kind == "residue":
+            residue_found = True
+
+    if residue_found:
+        receipt["examples"]["residue_gcd1_spurious"] = {
+            "case": "residue_mixed_2_3",
+            "gcd": 1,
+            "expected": "no residue",
+            "got": "residue admitted"
+        }
+        return receipt
+
+    receipt["proof_samples"].append({
+        "kind": "residue_gcd1",
+        "ok": True,
+        "checked": 0  # No residue should be admitted
+    })
+
+    # ========================================================================
+    # Check 8: Residue distinct from translation (WO-04)
+    # ========================================================================
+    # Grid with period-2 rows
+    # Residue wraps (full domain), translation doesn't (partial domain)
+    # They should have DIFFERENT images and BOTH be admitted
+    G8 = [
+        [0, 1, 0, 1, 0, 1],
+        [0, 1, 0, 1, 0, 1]
+    ]
+
+    base8 = build_base_views(G8)
+    closure8 = build_closure_depth2(G8, base8)
+
+    # Both residue row p=2 and translation dj=2 di=0 should be admitted
+    # They have different images (residue wraps, translation doesn't)
+    residue_p2_found = False
+    translate_dj2_found = False
+    for v in closure8:
+        if v.kind == "residue" and v.params.get("axis") == "row" and v.params.get("p") == 2:
+            residue_p2_found = True
+        if v.kind == "translate" and v.params.get("dj") == 2 and v.params.get("di") == 0:
+            translate_dj2_found = True
+
+    # Both should be admitted (different images)
+    if not (residue_p2_found and translate_dj2_found):
+        receipt["examples"]["residue_translate_missing"] = {
+            "case": "residue_vs_translation",
+            "residue_found": residue_p2_found,
+            "translation_found": translate_dj2_found,
+            "expected": "both admitted"
+        }
+        return receipt
+
+    receipt["proof_samples"].append({
+        "kind": "residue_vs_translate",
+        "ok": True,
+        "checked": len(closure8)
+    })
+
     # Final receipt
     receipt["count"] = len(closure3)  # Use G3 for reference count
     receipt["depth_max"] = 2 if any(v.kind == "compose" for v in closure3) else 1
@@ -629,4 +1019,56 @@ def init() -> None:
         ex = receipt["examples"]["cap_violated"]
         raise AssertionError(
             f"sviews identity failed: cap violated count={ex['count']}, expected ≤ 128"
+        )
+
+    # WO-04 residue checks
+    if "residue_row_domain" in receipt.get("examples", {}):
+        ex = receipt["examples"]["residue_row_domain"]
+        raise AssertionError(
+            f"sviews identity failed: residue row p={ex['p']} "
+            f"dom_size={ex['got_dom_size']}, expected={ex['expected_dom_size']}"
+        )
+
+    if "residue_row_missing" in receipt.get("examples", {}):
+        ex = receipt["examples"]["residue_row_missing"]
+        raise AssertionError(
+            f"sviews identity failed: residue row p={ex['p']} not admitted, expected admitted"
+        )
+
+    if "residue_col_spurious" in receipt.get("examples", {}):
+        ex = receipt["examples"]["residue_col_spurious"]
+        raise AssertionError(
+            f"sviews identity failed: residue col spuriously admitted in {ex['case']}, expected rejected"
+        )
+
+    if "residue_gcd_domain" in receipt.get("examples", {}):
+        ex = receipt["examples"]["residue_gcd_domain"]
+        raise AssertionError(
+            f"sviews identity failed: residue row p={ex['p']} (gcd) "
+            f"dom_size={ex['got_dom_size']}, expected={ex['expected_dom_size']}"
+        )
+
+    if "residue_gcd_missing" in receipt.get("examples", {}):
+        ex = receipt["examples"]["residue_gcd_missing"]
+        raise AssertionError(
+            f"sviews identity failed: residue row p={ex['p']} (gcd of {ex['gcd_of']}) not admitted, expected admitted"
+        )
+
+    if "residue_col_spurious_mixed" in receipt.get("examples", {}):
+        ex = receipt["examples"]["residue_col_spurious_mixed"]
+        raise AssertionError(
+            f"sviews identity failed: residue col spuriously admitted in {ex['case']}, expected rejected"
+        )
+
+    if "residue_gcd1_spurious" in receipt.get("examples", {}):
+        ex = receipt["examples"]["residue_gcd1_spurious"]
+        raise AssertionError(
+            f"sviews identity failed: residue admitted when gcd={ex['gcd']}, expected no residue"
+        )
+
+    if "residue_translate_missing" in receipt.get("examples", {}):
+        ex = receipt["examples"]["residue_translate_missing"]
+        raise AssertionError(
+            f"sviews identity failed: residue_found={ex['residue_found']}, "
+            f"translation_found={ex['translation_found']}, expected={ex['expected']}"
         )

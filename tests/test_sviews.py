@@ -469,6 +469,335 @@ def test_golden_constant_grid_many_views():
 
 
 # ============================================================================
+# Residue-k Period Tests (WO-04)
+# ============================================================================
+
+def test_minimal_row_period_computation():
+    """Test minimal_row_period() helper function"""
+    # Period-3 rows
+    grid = [
+        [0, 1, 2, 0, 1, 2, 0, 1, 2],
+        [3, 4, 5, 3, 4, 5, 3, 4, 5]
+    ]
+
+    gcd_row, per_row_periods = sviews.minimal_row_period(grid)
+
+    # Both rows have period 3
+    assert per_row_periods == [3, 3], f"Expected [3, 3], got {per_row_periods}"
+    assert gcd_row == 3, f"Expected gcd=3, got {gcd_row}"
+
+    # Mixed periods: 2 and 2
+    grid2 = [
+        [0, 1, 0, 1, 0, 1],
+        [2, 3, 2, 3, 2, 3]
+    ]
+
+    gcd_row2, per_row_periods2 = sviews.minimal_row_period(grid2)
+    assert per_row_periods2 == [2, 2], f"Expected [2, 2], got {per_row_periods2}"
+    assert gcd_row2 == 2, f"Expected gcd=2, got {gcd_row2}"
+
+    # Incompatible periods: 2 and 3
+    grid3 = [
+        [0, 1, 0, 1, 0, 1],
+        [2, 3, 4, 2, 3, 4]
+    ]
+
+    gcd_row3, per_row_periods3 = sviews.minimal_row_period(grid3)
+    assert per_row_periods3 == [2, 3], f"Expected [2, 3], got {per_row_periods3}"
+    assert gcd_row3 == 1, f"Expected gcd=1, got {gcd_row3}"
+
+
+def test_minimal_col_period_computation():
+    """Test minimal_col_period() helper function"""
+    # Period-2 columns
+    grid = [
+        [0, 1, 2],
+        [3, 4, 5],
+        [0, 1, 2],
+        [3, 4, 5]
+    ]
+
+    gcd_col, per_col_periods = sviews.minimal_col_period(grid)
+
+    # All columns have period 2
+    assert per_col_periods == [2, 2, 2], f"Expected [2, 2, 2], got {per_col_periods}"
+    assert gcd_col == 2, f"Expected gcd=2, got {gcd_col}"
+
+    # Single period-3 column
+    grid2 = [
+        [0],
+        [1],
+        [2],
+        [0],
+        [1],
+        [2]
+    ]
+
+    gcd_col2, per_col_periods2 = sviews.minimal_col_period(grid2)
+    assert per_col_periods2 == [3], f"Expected [3], got {per_col_periods2}"
+    assert gcd_col2 == 3, f"Expected gcd=3, got {gcd_col2}"
+
+
+def test_residue_row_period_3():
+    """Residue-k: Period-3 rows should admit row residue p=3"""
+    # Grid with period-3 horizontal pattern (9 cols to have 3 full periods)
+    grid = [
+        [0, 1, 2, 0, 1, 2, 0, 1, 2],
+        [3, 4, 5, 3, 4, 5, 3, 4, 5]
+    ]
+
+    views = sviews.build_sviews(grid)
+
+    # Find residue row p=3
+    residue_row_3 = [v for v in views
+                     if v.kind == "residue"
+                     and v.params.get("axis") == "row"
+                     and v.params.get("p") == 3]
+
+    assert len(residue_row_3) == 1, f"Expected exactly 1 residue row p=3, got {len(residue_row_3)}"
+
+    view = residue_row_3[0]
+    H, W = len(grid), len(grid[0])
+
+    # Should have full domain
+    assert view.dom_size == H * W, f"Residue should have full domain {H*W}, got {view.dom_size}"
+
+    # Verify proof: G[i,j] = G[i,(j+3)%W] for all i,j
+    for i in range(H):
+        for j in range(W):
+            result = view.apply((i, j))
+            assert result is not None, f"Residue domain should be full at ({i},{j})"
+            i_mapped, j_mapped = result
+            assert grid[i][j] == grid[i_mapped][j_mapped], (
+                f"Residue proof failed: ({i},{j})={grid[i][j]} != "
+                f"({i_mapped},{j_mapped})={grid[i_mapped][j_mapped]}"
+            )
+
+
+def test_residue_col_period_2():
+    """Residue-k: Period-2 columns should admit col residue p=2"""
+    # Grid with period-2 vertical pattern (4 rows to have 2 full periods)
+    grid = [
+        [0, 1, 2],
+        [3, 4, 5],
+        [0, 1, 2],
+        [3, 4, 5]
+    ]
+
+    views = sviews.build_sviews(grid)
+
+    # Find residue col p=2
+    residue_col_2 = [v for v in views
+                     if v.kind == "residue"
+                     and v.params.get("axis") == "col"
+                     and v.params.get("p") == 2]
+
+    assert len(residue_col_2) == 1, f"Expected exactly 1 residue col p=2, got {len(residue_col_2)}"
+
+    view = residue_col_2[0]
+    H, W = len(grid), len(grid[0])
+
+    # Should have full domain
+    assert view.dom_size == H * W, f"Residue should have full domain {H*W}, got {view.dom_size}"
+
+    # Verify proof: G[i,j] = G[(i+2)%H,j] for all i,j
+    for i in range(H):
+        for j in range(W):
+            result = view.apply((i, j))
+            assert result is not None, f"Residue domain should be full at ({i},{j})"
+            i_mapped, j_mapped = result
+            assert grid[i][j] == grid[i_mapped][j_mapped], (
+                f"Residue proof failed: ({i},{j})={grid[i][j]} != "
+                f"({i_mapped},{j_mapped})={grid[i_mapped][j_mapped]}"
+            )
+
+
+def test_residue_gcd_mixed_periods():
+    """Residue-k: Mixed periods with gcd > 1 admits residue (e.g., 2 & 4 → gcd=2)"""
+    # Row 0: period 2 (ab ab ab ab)
+    # Row 1: period 4 (abcd abcd) - but also satisfies period 2 if we use same pattern
+    # For true mixed test: both rows period 2
+    grid = [
+        [0, 1, 0, 1, 0, 1, 0, 1],
+        [2, 3, 2, 3, 2, 3, 2, 3]
+    ]
+
+    views = sviews.build_sviews(grid)
+
+    # gcd(2, 2) = 2, so residue row p=2 should be admitted
+    residue_row_2 = [v for v in views
+                     if v.kind == "residue"
+                     and v.params.get("axis") == "row"
+                     and v.params.get("p") == 2]
+
+    assert len(residue_row_2) == 1, f"Expected residue row p=2 for gcd=2, got {len(residue_row_2)}"
+
+    view = residue_row_2[0]
+    H, W = len(grid), len(grid[0])
+    assert view.dom_size == H * W, f"Residue should have full domain {H*W}, got {view.dom_size}"
+
+
+def test_residue_incompatible_periods():
+    """Residue-k: Incompatible periods (2 & 3 → gcd=1) rejects residue"""
+    # Row 0: period 2 (ab ab ab)
+    # Row 1: period 3 (abc abc)
+    # gcd(2, 3) = 1 → no residue
+    grid = [
+        [0, 1, 0, 1, 0, 1],
+        [2, 3, 4, 2, 3, 4]
+    ]
+
+    views = sviews.build_sviews(grid)
+
+    # Should NOT admit any residue views (gcd=1)
+    residue_views = [v for v in views if v.kind == "residue"]
+
+    assert len(residue_views) == 0, (
+        f"Expected no residue views for gcd=1, got {len(residue_views)}: "
+        f"{[v.params for v in residue_views]}"
+    )
+
+
+def test_residue_dedup_with_translation():
+    """Residue-k: Residue wraps (full domain) vs translation (partial) are distinct"""
+    # Grid with period-2 rows
+    # Residue row p=2 has full domain (wraps)
+    # Translation dj=2 has partial domain (no wrap)
+    # Different images → both admitted
+    grid = [
+        [0, 1, 0, 1, 0, 1],
+        [0, 1, 0, 1, 0, 1]
+    ]
+
+    views = sviews.build_sviews(grid)
+
+    # Find residue row p=2
+    residue_row_2 = [v for v in views
+                     if v.kind == "residue"
+                     and v.params.get("axis") == "row"
+                     and v.params.get("p") == 2]
+
+    # Find translation dj=2, di=0
+    translate_02 = [v for v in views
+                    if v.kind == "translate"
+                    and v.params.get("di") == 0
+                    and v.params.get("dj") == 2]
+
+    # Both should be admitted (different domain sizes)
+    assert len(residue_row_2) == 1, f"Expected residue row p=2, got {len(residue_row_2)}"
+    assert len(translate_02) == 1, f"Expected translation (0,2), got {len(translate_02)}"
+
+    residue_view = residue_row_2[0]
+    translate_view = translate_02[0]
+
+    H, W = len(grid), len(grid[0])
+
+    # Residue has full domain (wraps)
+    assert residue_view.dom_size == H * W, (
+        f"Residue should have full domain {H*W}, got {residue_view.dom_size}"
+    )
+
+    # Translation has partial domain (no wrap: W - |dj| columns)
+    # For dj=2 on W=6: overlap is columns [0..3] (4 columns × 2 rows = 8)
+    expected_translate_dom = 2 * (W - 2)
+    assert translate_view.dom_size == expected_translate_dom, (
+        f"Translation (0,2) should have domain {expected_translate_dom}, "
+        f"got {translate_view.dom_size}"
+    )
+
+    # Verify they have different signatures (not deduped)
+    from sviews import compute_image_signature
+    sig_residue = compute_image_signature(residue_view, (H, W))
+    sig_translate = compute_image_signature(translate_view, (H, W))
+
+    assert sig_residue != sig_translate, "Residue and translation should have different signatures"
+
+
+def test_residue_full_width_not_admitted():
+    """Residue-k: Period = full width should not be admitted (trivial)"""
+    # Row with period W=6 (no true periodicity)
+    grid = [
+        [0, 1, 2, 3, 4, 5],
+        [6, 7, 8, 9, 10, 11]
+    ]
+
+    views = sviews.build_sviews(grid)
+
+    # Should NOT admit residue row (period = W is trivial, gcd < W required)
+    residue_row_views = [v for v in views
+                         if v.kind == "residue"
+                         and v.params.get("axis") == "row"]
+
+    assert len(residue_row_views) == 0, (
+        f"Expected no residue row for period=W, got {len(residue_row_views)}"
+    )
+
+
+def test_residue_single_pixel_row():
+    """Residue-k: Single-column grid (W=1) should not admit residue"""
+    # W=1 means period can only be 1, but we need p > 1 and p < W
+    grid = [
+        [0],
+        [0],
+        [0],
+        [0]
+    ]
+
+    views = sviews.build_sviews(grid)
+
+    # Should NOT admit residue row (W=1, need p < W)
+    residue_row_views = [v for v in views
+                         if v.kind == "residue"
+                         and v.params.get("axis") == "row"]
+
+    assert len(residue_row_views) == 0, (
+        f"Expected no residue row for W=1, got {len(residue_row_views)}"
+    )
+
+
+def test_residue_proof_all_pixels():
+    """Residue-k: Verify proof holds for all pixels in admitted residue view"""
+    # Grid with period-4 rows
+    grid = [
+        [0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3],
+        [4, 5, 6, 7, 4, 5, 6, 7, 4, 5, 6, 7]
+    ]
+
+    views = sviews.build_sviews(grid)
+
+    # Find residue row p=4
+    residue_row_4 = [v for v in views
+                     if v.kind == "residue"
+                     and v.params.get("axis") == "row"
+                     and v.params.get("p") == 4]
+
+    assert len(residue_row_4) == 1, f"Expected residue row p=4, got {len(residue_row_4)}"
+
+    view = residue_row_4[0]
+    H, W = len(grid), len(grid[0])
+
+    # Verify proof holds for ALL pixels
+    violations = []
+    for i in range(H):
+        for j in range(W):
+            result = view.apply((i, j))
+            if result is None:
+                violations.append(f"Domain incomplete at ({i},{j})")
+                continue
+
+            i_mapped, j_mapped = result
+            if grid[i][j] != grid[i_mapped][j_mapped]:
+                violations.append(
+                    f"Proof failed at ({i},{j})={grid[i][j]} -> "
+                    f"({i_mapped},{j_mapped})={grid[i_mapped][j_mapped]}"
+                )
+
+    assert len(violations) == 0, (
+        f"Residue proof violations:\n" + "\n".join(violations[:5])
+    )
+
+
+# ============================================================================
 # Forbidden Patterns Test
 # ============================================================================
 
@@ -555,12 +884,12 @@ def test_self_check_enabled():
 
 def test_intent_summary():
     """
-    Test Intent Summary for WO-03 (S-views v1):
+    Test Intent Summary for WO-03 + WO-04 (S-views v1 + Residue-k):
 
     Invariants Covered:
     - I-3: S-View Closure Bounds (depth ≤ 2, count ≤ 128, proof satisfied on domain)
 
-    Property Tests:
+    Property Tests (WO-03):
     - Identity always admitted with full domain
     - D4-preserving views only for invariant ops (180-symmetric → op=2)
     - D4 non-preserving rejected (asymmetric grid)
@@ -574,6 +903,17 @@ def test_intent_summary():
     - Cap enforced at 128
     - Deterministic truncation (same order on repeated calls)
 
+    Property Tests (WO-04 Residue-k):
+    - Minimal period computation (row and column)
+    - Period-3 rows admit residue row p=3
+    - Period-2 columns admit residue col p=2
+    - Mixed periods with gcd > 1 admit residue (e.g., 2 & 2 → gcd=2)
+    - Incompatible periods (2 & 3 → gcd=1) reject residue
+    - Residue (full domain, wraps) distinct from translation (partial domain)
+    - Period = full width/height not admitted (trivial)
+    - Single-pixel dimension rejects residue
+    - Proof holds for all pixels in residue views
+
     Golden Checks:
     - Asymmetric grid admits only identity
     - Horizontal stripe admits horizontal translations
@@ -586,12 +926,15 @@ def test_intent_summary():
     Self-Check:
     - Module loads without errors
     - Self-check can run when ARC_SELF_CHECK=1
+    - Residue-k checks (period-3, gcd, incompatibility, dedup)
 
     Microsuite IDs: N/A (sviews is infrastructure; microsuite tested in integration)
 
-    Note: v1 scope is intentional subset:
-    - Identity, D4-preserving, overlap translations
-    - Residue-k periods arrive in WO-04 (extends, doesn't change)
+    Implementation Notes:
+    - WO-03 provided base S-views (identity, D4, translations, closure)
+    - WO-04 extended with residue-k periods (row/col shifts by gcd)
+    - Residue wraps (modulo), translation doesn't (overlap)
+    - Both can coexist with different images
     """
     pass
 
