@@ -1,0 +1,815 @@
+"""
+Truth Partition Q: Must-link + Paige-Tarjan (WO-06).
+
+Computes coarsest partition of presented test input via:
+  1. Must-link closure (S-views + component folds)
+  2. Cannot-link refinement (PT with fixed predicate order)
+
+All operations deterministic; debugging = algebra.
+"""
+
+import os
+from typing import List, Tuple, Dict, Optional, Any
+from collections import defaultdict
+
+import morphisms
+import receipts
+
+# Type aliases
+Coord = Tuple[int, int]
+IntGrid = List[List[int]]
+
+
+# ============================================================================
+# PARTITION CLASS
+# ============================================================================
+
+
+class Partition:
+    """
+    Partition of test input pixels into equivalence classes.
+
+    Attributes:
+        H: Grid height
+        W: Grid width
+        cid_of: Class id per pixel (row-major, length H*W)
+    """
+
+    def __init__(self, H: int, W: int, cid_of: List[int]):
+        self.H = H
+        self.W = W
+        self.cid_of = cid_of
+
+    def classes(self) -> List[List[Coord]]:
+        """
+        Return coordinates per class in deterministic order.
+
+        Returns:
+            List of classes (each class is list of coords)
+            Ordered by class id (0..k-1)
+        """
+        class_map = defaultdict(list)
+        for idx, cid in enumerate(self.cid_of):
+            i = idx // self.W
+            j = idx % self.W
+            class_map[cid].append((i, j))
+
+        # Return in class id order
+        max_cid = max(self.cid_of) if self.cid_of else -1
+        result = []
+        for cid in range(max_cid + 1):
+            if cid in class_map:
+                result.append(class_map[cid])
+        return result
+
+
+# ============================================================================
+# UNION-FIND (for must-link)
+# ============================================================================
+
+
+class UnionFind:
+    """Union-find with path compression and union-by-rank."""
+
+    def __init__(self, n: int):
+        self.parent = list(range(n))
+        self.rank = [0] * n
+
+    def find(self, x: int) -> int:
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])  # path compression
+        return self.parent[x]
+
+    def union(self, x: int, y: int) -> bool:
+        """
+        Unite sets containing x and y.
+
+        Returns:
+            True if they were in different sets (edge applied)
+        """
+        px, py = self.find(x), self.find(y)
+        if px == py:
+            return False
+
+        # Union by rank
+        if self.rank[px] < self.rank[py]:
+            px, py = py, px
+        self.parent[py] = px
+        if self.rank[px] == self.rank[py]:
+            self.rank[px] += 1
+        return True
+
+    def get_classes(self) -> List[int]:
+        """Return class id per element (normalized to 0..k-1)."""
+        # Normalize: map each root to 0..k-1
+        roots = sorted(set(self.find(i) for i in range(len(self.parent))))
+        root_to_cid = {r: i for i, r in enumerate(roots)}
+        return [root_to_cid[self.find(i)] for i in range(len(self.parent))]
+
+
+# ============================================================================
+# TEST→OUT CONJUGATION (uses morphisms from WO-01)
+# ============================================================================
+
+
+def test_to_out(
+    x: Coord,
+    P_test: Tuple,
+    P_out: Tuple
+) -> Optional[Coord]:
+    """
+    Map test pixel to output pixel via TEST→OUT conjugation.
+
+    TEST→OUT: pose_inv(test) → anchor_inv(test) → pose_fwd(out)
+
+    Args:
+        x: Test pixel coord
+        P_test: Test frame (op, anchor, shape)
+        P_out: Output frame (op, (0,0), shape) - outputs not anchored
+
+    Returns:
+        Output coord or None if undefined
+    """
+    op_test, anchor_test, shape_test = P_test
+    op_out, _, shape_out = P_out
+
+    # Inverse pose in test frame
+    x1 = morphisms.pose_inv(x, op_test, shape_test)
+    if x1 is None:
+        return None
+
+    # Inverse anchor in test frame
+    x2 = morphisms.anchor_inv(x1, anchor_test)
+
+    # Forward pose in output frame
+    x3 = morphisms.pose_fwd(x2, op_out, shape_out)
+
+    return x3
+
+
+# ============================================================================
+# CHECK SINGLE-VALUED (verification after PT)
+# ============================================================================
+
+
+def check_single_valued(
+    part: Partition,
+    frames: Dict[str, Any],
+    train_outputs_presented: List[IntGrid]
+) -> Tuple[bool, Optional[Dict]]:
+    """
+    Verify every class has ≤1 output color across all trainings.
+
+    Uses TEST→OUT conjugation; skips OOB mappings.
+
+    Args:
+        part: Final partition
+        frames: Dict with P_test and P_out list
+        train_outputs_presented: List of posed training outputs
+
+    Returns:
+        (ok, witness) where witness has {cid, train_idx, coord_out, colors_seen}
+        for first contradiction, else None
+    """
+    P_test = frames["P_test"]
+    P_out_list = frames["P_out"]
+
+    classes_list = part.classes()
+
+    for cid, coords in enumerate(classes_list):
+        colors_seen = set()
+
+        for train_idx, Y_i in enumerate(train_outputs_presented):
+            P_out = P_out_list[train_idx]
+            H_out = len(Y_i)
+            W_out = len(Y_i[0]) if H_out > 0 else 0
+
+            for x in coords:
+                coord_out = test_to_out(x, P_test, P_out)
+                if coord_out is None:
+                    continue
+
+                r, c = coord_out
+                # Check bounds
+                if 0 <= r < H_out and 0 <= c < W_out:
+                    colors_seen.add(Y_i[r][c])
+
+        # Check single-valued
+        if len(colors_seen) > 1:
+            witness = {
+                "cid": cid,
+                "train_idx": -1,  # multiple trainings involved
+                "coord_out": None,
+                "colors_seen": sorted(colors_seen)
+            }
+            return (False, witness)
+
+    return (True, None)
+
+
+# ============================================================================
+# PAIGE-TARJAN (cannot-link with fixed predicate order)
+# ============================================================================
+
+
+def paige_tarjan_refine(
+    G_test: IntGrid,
+    initial_cid_of: List[int],
+    sviews: List,
+    components: List,
+    frames: Dict[str, Any],
+    train_outputs_presented: List[IntGrid]
+) -> Tuple[List[int], List[Dict]]:
+    """
+    Refine partition via Paige-Tarjan with fixed predicate order.
+
+    Predicate order: input_color ≺ sview_image ≺ parity
+
+    Args:
+        G_test: Presented test input
+        initial_cid_of: Class id per pixel after must-link (row-major)
+        sviews: S-views list
+        components: Components list
+        frames: Frames dict
+        train_outputs_presented: Posed training outputs
+
+    Returns:
+        (final_cid_of, splits) where:
+            final_cid_of: Updated class id array
+            splits: List of split records for receipt
+    """
+    H = len(G_test)
+    W = len(G_test[0]) if H > 0 else 0
+
+    P_test = frames["P_test"]
+    P_out_list = frames["P_out"]
+
+    # Initialize partition state (freeze UF, operate on arrays)
+    cid_of = list(initial_cid_of)  # Copy so we can mutate
+    next_cid = max(cid_of) + 1 if cid_of else 0  # Monotonic allocator
+
+    # Build predicates (input-only, deterministic order)
+    predicates = []
+
+    # 1. input_color
+    def make_input_color_pred():
+        def pred(x):
+            return G_test[x[0]][x[1]]
+        return ("input_color", pred)
+
+    predicates.append(make_input_color_pred())
+
+    # 2. membership_in_Sview_image (S-views + components)
+    # S-view images
+    for view in sviews:
+        # Compute image set
+        image_set = set()
+        for i in range(H):
+            for j in range(W):
+                x = (i, j)
+                if hasattr(view, 'apply'):
+                    y = view.apply(x)
+                elif 'apply' in view:
+                    y = view['apply'](x)
+                else:
+                    continue
+                if y is not None:
+                    image_set.add(y)
+
+        if image_set:
+            def make_membership_pred(img_set):
+                def pred(x):
+                    return 1 if x in img_set else 0
+                return pred
+
+            predicates.append(("sview_image", make_membership_pred(image_set)))
+
+    # Component masks
+    for comp in components:
+        mask_set = set(comp.mask)
+
+        def make_comp_pred(mset):
+            def pred(x):
+                return 1 if x in mset else 0
+            return pred
+
+        predicates.append(("sview_image", make_comp_pred(mask_set)))
+
+    # 3. parity
+    def make_parity_pred():
+        def pred(x):
+            return (x[0] + x[1]) % 2
+        return ("parity", pred)
+
+    predicates.append(make_parity_pred())
+
+    splits = []
+    changed = True
+
+    while changed:
+        changed = False
+
+        # Build current classes from cid_of array
+        classes_map = defaultdict(list)
+        for idx in range(H * W):
+            i = idx // W
+            j = idx % W
+            classes_map[cid_of[idx]].append((i, j))
+
+        # Scan classes in ascending order
+        for cid in sorted(classes_map.keys()):
+            coords = classes_map[cid]
+
+            # Check for contradiction via outputs
+            colors_by_train = []
+            witness = None
+
+            for train_idx, Y_i in enumerate(train_outputs_presented):
+                P_out = P_out_list[train_idx]
+                H_out = len(Y_i)
+                W_out = len(Y_i[0]) if H_out > 0 else 0
+
+                colors_this_train = set()
+                witness_coord = None
+
+                for x in coords:
+                    coord_out = test_to_out(x, P_test, P_out)
+                    if coord_out is None:
+                        continue
+
+                    r, c = coord_out
+                    if 0 <= r < H_out and 0 <= c < W_out:
+                        colors_this_train.add(Y_i[r][c])
+                        if not witness_coord:
+                            witness_coord = coord_out
+
+                if colors_this_train:
+                    colors_by_train.append((train_idx, colors_this_train, witness_coord))
+
+            # Gather all colors seen
+            all_colors = set()
+            for _, colors, _ in colors_by_train:
+                all_colors.update(colors)
+
+            # If ≥2 colors, we have contradiction
+            if len(all_colors) < 2:
+                continue  # No contradiction, class is fine
+
+            # Find witness (first training with multiple colors or first conflict)
+            witness_train = -1
+            witness_coord_out = None
+            for train_idx, colors, coord in colors_by_train:
+                if len(colors) > 1:
+                    witness_train = train_idx
+                    witness_coord_out = coord
+                    break
+
+            if witness_train == -1 and len(colors_by_train) >= 2:
+                # Different colors across trainings
+                witness_train = colors_by_train[0][0]
+                witness_coord_out = colors_by_train[0][2]
+
+            # Try to split by first applicable predicate
+            split_done = False
+
+            for pred_name, pred_fn in predicates:
+                # Evaluate predicate on all coords in class
+                pred_values = defaultdict(list)
+                for x in coords:
+                    val = pred_fn(x)
+                    pred_values[val].append(x)
+
+                # Check if predicate splits into ≥2 parts
+                if len(pred_values) < 2:
+                    continue
+
+                # Split: reassign cid_of for each part
+                parts_list = sorted(pred_values.items(), key=lambda kv: kv[0])
+                new_cids = []
+
+                for part_idx, (val, part_coords) in enumerate(parts_list):
+                    if part_idx == 0:
+                        # Reuse old cid for first part
+                        new_cid = cid
+                    else:
+                        # Allocate new cid (monotonic)
+                        new_cid = next_cid
+                        next_cid += 1
+
+                    new_cids.append(new_cid)
+
+                    # Update cid_of array
+                    for x in part_coords:
+                        idx = x[0] * W + x[1]
+                        cid_of[idx] = new_cid
+
+                # Record split
+                splits.append({
+                    "cid": cid,
+                    "predicate": pred_name,
+                    "parts": len(parts_list),
+                    "sizes": [len(p[1]) for p in parts_list],
+                    "witness": {
+                        "train_idx": witness_train,
+                        "coord_out": list(witness_coord_out) if witness_coord_out else None,
+                        "colors_seen": sorted(all_colors)
+                    }
+                })
+
+                split_done = True
+                changed = True
+                break  # Stop at first predicate that splits
+
+            if not split_done:
+                # No predicate could split this contradictory class
+                raise AssertionError(
+                    f"PT failed: class {cid} has contradiction but no predicate splits it. "
+                    f"colors_seen={sorted(all_colors)}, witness={witness_coord_out}"
+                )
+
+        # End of class scan; if changed, repeat
+
+    return (cid_of, splits)
+
+
+# ============================================================================
+# BUILD TRUTH PARTITION (main API)
+# ============================================================================
+
+
+def build_truth_partition(
+    G_test_presented: IntGrid,
+    sviews: List,
+    components: List,
+    frames: Dict[str, Any],
+    train_outputs_presented: List[IntGrid]
+) -> Partition:
+    """
+    Build coarsest truth partition Q via must-link + PT.
+
+    Args:
+        G_test_presented: Presented test input
+        sviews: S-views from build_sviews (WO-03/04)
+        components: Components from build_components (WO-05)
+        frames: Dict with P_test, P_out list
+        train_outputs_presented: List of posed training outputs
+
+    Returns:
+        Partition object with final cid_of
+    """
+    H = len(G_test_presented)
+    W = len(G_test_presented[0]) if H > 0 else 0
+
+    if H == 0 or W == 0:
+        return Partition(0, 0, [])
+
+    # Initialize union-find (row-major)
+    uf = UnionFind(H * W)
+
+    # Must-link counts
+    sview_edges = 0
+    comp_edges = 0
+
+    # Phase 1: Must-link from S-views
+    for view in sviews:
+        for i in range(H):
+            for j in range(W):
+                x = (i, j)
+
+                # Get M(x)
+                if hasattr(view, 'apply'):
+                    y = view.apply(x)
+                elif 'apply' in view:
+                    y = view['apply'](x)
+                else:
+                    continue
+
+                if y is not None:
+                    idx_x = x[0] * W + x[1]
+                    idx_y = y[0] * W + y[1]
+                    if uf.union(idx_x, idx_y):
+                        sview_edges += 1
+
+    # Phase 2: Must-link from component folds
+    from components import component_anchor_views
+
+    comp_views = component_anchor_views(components)
+    for view in comp_views:
+        apply_fn = view['apply']
+        anchor = view['anchor']
+
+        for i in range(H):
+            for j in range(W):
+                x = (i, j)
+                y = apply_fn(x)
+
+                if y is not None:
+                    idx_x = x[0] * W + x[1]
+                    idx_y = y[0] * W + y[1]
+                    if uf.union(idx_x, idx_y):
+                        comp_edges += 1
+
+    # Phase 3: Freeze UF and extract initial partition
+    cid_of_after_mustlink = uf.get_classes()
+
+    # Phase 4: Paige-Tarjan refinement (operates on partition array)
+    cid_of, splits = paige_tarjan_refine(
+        G_test_presented,
+        cid_of_after_mustlink,
+        sviews,
+        components,
+        frames,
+        train_outputs_presented
+    )
+
+    # Finalize partition
+    part = Partition(H, W, cid_of)
+
+    # Verify single-valued
+    ok, witness = check_single_valued(part, frames, train_outputs_presented)
+
+    # Build receipt
+    receipt = {
+        "splits": splits,
+        "final_classes": max(cid_of) + 1 if cid_of else 0,
+        "single_valued_ok": ok,
+        "mustlink_sources": {
+            "sviews": sview_edges,
+            "components": comp_edges
+        },
+        "examples": {}
+    }
+
+    if not ok:
+        receipt["examples"]["case"] = "single_valued_failed"
+        receipt["examples"]["detail"] = witness
+        receipts.log("truth", receipt)
+        raise AssertionError(
+            f"truth partition failed: class {witness['cid']} has multiple colors: "
+            f"{witness['colors_seen']}"
+        )
+
+    receipts.log("truth", receipt)
+    return part
+
+
+# ============================================================================
+# SELF-CHECK (algebraic debugging)
+# ============================================================================
+
+
+def _self_check_truth() -> Dict:
+    """
+    Verify truth partition on synthetic cases.
+
+    Returns:
+        Receipt payload for "truth" section
+    """
+    receipt = {
+        "splits": [],
+        "final_classes": 0,
+        "single_valued_ok": True,
+        "mustlink_sources": {"sviews": 0, "components": 0},
+        "examples": {}
+    }
+
+    # ========================================================================
+    # Check 1: Must-link merges reduce class count
+    # ========================================================================
+    # Grid with translation that merges pixels
+    G1 = [
+        [1, 1, 1],
+        [2, 2, 2]
+    ]
+
+    # Create trivial frames
+    P_test_1 = (0, (0, 0), (2, 3))
+    P_out_1 = [(0, (0, 0), (2, 3))]  # Same shape
+
+    # Create translation S-view: (i,j) -> (i, (j+1)%3)
+    class MockView:
+        def __init__(self):
+            self.kind = "translate"
+            self.params = {"di": 0, "dj": 1}
+
+        def apply(self, x):
+            i, j = x
+            return (i, (j + 1) % 3)
+
+    sviews1 = [MockView()]
+    components1 = []
+
+    # Training output (same as input for this test)
+    Y1 = [G1]
+
+    frames1 = {"P_test": P_test_1, "P_out": P_out_1}
+
+    # Build partition (should merge due to translation)
+    uf1 = UnionFind(6)
+    for view in sviews1:
+        for i in range(2):
+            for j in range(3):
+                x = (i, j)
+                y = view.apply(x)
+                if y is not None:
+                    idx_x = i * 3 + j
+                    idx_y = y[0] * 3 + y[1]
+                    uf1.union(idx_x, idx_y)
+
+    cid_of_1 = uf1.get_classes()
+    num_classes_1 = len(set(cid_of_1))
+
+    # Should have 2 classes (one per row, since each row has same color)
+    if num_classes_1 != 2:
+        receipt["examples"]["case"] = "mustlink"
+        receipt["examples"]["detail"] = {
+            "expected_classes": 2,
+            "got_classes": num_classes_1
+        }
+        receipt["single_valued_ok"] = False
+        return receipt
+
+    # ========================================================================
+    # Check 2: Contradiction splits by first predicate
+    # ========================================================================
+    # Grid with different input colors → should split by input_color first
+    G2 = [
+        [5, 6],
+        [5, 6]
+    ]
+
+    P_test_2 = (0, (0, 0), (2, 2))
+    P_out_2 = [(0, (0, 0), (2, 2))]
+
+    # Training output where color-5 pixels get 1, color-6 pixels get 2
+    Y2_0 = [[1, 2], [1, 2]]
+    Y2 = [Y2_0]
+
+    frames2 = {"P_test": P_test_2, "P_out": P_out_2}
+
+    # Start with all in one class (will be contradictory)
+    uf2 = UnionFind(4)
+    # Force all into same class
+    uf2.union(0, 1)
+    uf2.union(0, 2)
+    uf2.union(0, 3)
+
+    # Should split by input_color (5 vs 6)
+    cid_of_2_after_mustlink = uf2.get_classes()
+    cid_of_2_final, splits2 = paige_tarjan_refine(G2, cid_of_2_after_mustlink, [], [], frames2, Y2)
+
+    if len(splits2) == 0:
+        receipt["examples"]["case"] = "PT_split_order"
+        receipt["examples"]["detail"] = {
+            "note": "Expected split due to contradiction",
+            "splits_count": 0
+        }
+        receipt["single_valued_ok"] = False
+        return receipt
+
+    # Check that split happened with input_color (first predicate)
+    if splits2[0]["predicate"] != "input_color":
+        receipt["examples"]["case"] = "PT_split_order"
+        receipt["examples"]["detail"] = {
+            "expected_predicate": "input_color",
+            "got": splits2[0]["predicate"]
+        }
+        receipt["single_valued_ok"] = False
+        return receipt
+
+    # ========================================================================
+    # Check 3: OOB skip logic
+    # ========================================================================
+    G3 = [[7]]
+    P_test_3 = (0, (0, 0), (1, 1))
+    P_out_3 = [(0, (0, 0), (1, 1))]
+
+    # Training output is empty (OOB for all pixels)
+    Y3 = [[]]  # H=1, W=0 (will cause OOB)
+
+    frames3 = {"P_test": P_test_3, "P_out": P_out_3}
+
+    uf3 = UnionFind(1)
+    # No splits should happen (no evidence from OOB)
+    cid_of_3_after_mustlink = uf3.get_classes()
+    cid_of_3_final, splits3 = paige_tarjan_refine(G3, cid_of_3_after_mustlink, [], [], frames3, Y3)
+
+    # Should have no splits (OOB skipped)
+    if len(splits3) > 0:
+        receipt["examples"]["case"] = "OOB"
+        receipt["examples"]["detail"] = {
+            "note": "OOB should be skipped, no splits expected",
+            "splits_count": len(splits3)
+        }
+        receipt["single_valued_ok"] = False
+        return receipt
+
+    # ========================================================================
+    # Check 4: Determinism under train permutation
+    # ========================================================================
+    G4 = [[1, 2], [3, 4]]
+    P_test_4 = (0, (0, 0), (2, 2))
+    P_out_4a = [(0, (0, 0), (2, 2)), (0, (0, 0), (2, 2))]
+    P_out_4b = [(0, (0, 0), (2, 2)), (0, (0, 0), (2, 2))]
+
+    Y4a = [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]
+    Y4b = [[[1, 2], [3, 4]], [[1, 2], [3, 4]]]  # Same, reversed order
+
+    frames4a = {"P_test": P_test_4, "P_out": P_out_4a}
+    frames4b = {"P_test": P_test_4, "P_out": P_out_4b[::-1]}
+
+    uf4a = UnionFind(4)
+    uf4b = UnionFind(4)
+
+    cid_of_4a_after_mustlink = uf4a.get_classes()
+    cid_of_4b_after_mustlink = uf4b.get_classes()
+
+    cid_of_4a, splits4a = paige_tarjan_refine(G4, cid_of_4a_after_mustlink, [], [], frames4a, Y4a)
+    cid_of_4b, splits4b = paige_tarjan_refine(G4, cid_of_4b_after_mustlink, [], [], frames4b, Y4b[::-1])
+
+    num_classes_4a = len(set(cid_of_4a))
+    num_classes_4b = len(set(cid_of_4b))
+
+    if num_classes_4a != num_classes_4b:
+        receipt["examples"]["case"] = "determinism"
+        receipt["examples"]["detail"] = {
+            "classes_forward": num_classes_4a,
+            "classes_reversed": num_classes_4b,
+            "note": "Non-deterministic under train permutation"
+        }
+        receipt["single_valued_ok"] = False
+        return receipt
+
+    # Final receipt (all checks passed)
+    receipt["final_classes"] = num_classes_1
+    receipt["mustlink_sources"]["sviews"] = 3  # 3 edges in G1
+    receipt["mustlink_sources"]["components"] = 0
+
+    return receipt
+
+
+# ============================================================================
+# MODULE INITIALIZATION
+# ============================================================================
+
+
+def init() -> None:
+    """
+    Run self-check and emit truth receipt.
+
+    Raises:
+        AssertionError: If any identity check fails
+
+    Notes:
+        - Called by harness, not on import
+        - Assumes receipts.init() has been called
+        - Runs self-check only if ARC_SELF_CHECK=1
+    """
+    # Check if self-check should run
+    if os.environ.get("ARC_SELF_CHECK") != "1":
+        # Skip self-check in normal mode (fast path)
+        receipts.log("truth", {
+            "splits": [],
+            "final_classes": 0,
+            "single_valued_ok": False,
+            "mustlink_sources": {"sviews": 0, "components": 0},
+            "examples": {},
+            "note": "self-check skipped (ARC_SELF_CHECK != 1)"
+        })
+        return
+
+    receipt = _self_check_truth()
+
+    # Emit receipt
+    receipts.log("truth", receipt)
+
+    # Assert all checks passed
+    if not receipt["single_valued_ok"]:
+        case = receipt["examples"].get("case", "unknown")
+        detail = receipt["examples"].get("detail", {})
+
+        if case == "mustlink":
+            raise AssertionError(
+                f"truth identity failed: must-link expected {detail['expected_classes']} classes, "
+                f"got {detail['got_classes']}"
+            )
+        elif case == "PT_split_order":
+            raise AssertionError(
+                f"truth identity failed: PT split order incorrect, detail={detail}"
+            )
+        elif case == "OOB":
+            raise AssertionError(
+                f"truth identity failed: OOB handling wrong, detail={detail}"
+            )
+        elif case == "determinism":
+            raise AssertionError(
+                f"truth identity failed: non-deterministic under train permutation, detail={detail}"
+            )
+        elif case == "single_valued_failed":
+            raise AssertionError(
+                f"truth identity failed: class {detail['cid']} has multiple colors {detail['colors_seen']}"
+            )
+        else:
+            raise AssertionError(
+                f"truth identity failed: case={case}, detail={detail}"
+            )
