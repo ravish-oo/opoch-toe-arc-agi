@@ -32,3 +32,8 @@ Run tests and --determinism.
 Add adversarial tests if needed (derived strictly from anchors/05), then re-evaluate.
 
 Approve only if all invariants hold and receipt hash is stable under train-order permutation.
+
+
+# for avoiding MD files
+pls proceed. for review. u can avoid writing a review file unless something u want to raise then write in reviews/ else if things are fine then just show me a
+  summary on terminal itself and avoid time wasting in writing files. same applies to tests as well.. something breaks then we need reports.. not for sake of it 

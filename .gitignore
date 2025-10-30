@@ -208,3 +208,4 @@ __marimo__/
 
 # Project data (do not version control large/raw datasets)
 data/
+reviews/
