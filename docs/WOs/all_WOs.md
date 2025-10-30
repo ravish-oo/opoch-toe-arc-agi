@@ -44,21 +44,21 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Reviewer produces:** component counts; splits using “sview_image|component_k”.
 **Done when:** receipts show components admitted; PT later can consume them.
 
-# WO-06 — Paige–Tarjan partition (truth Q)
+# WO-06 — Paige–Tarjan partition (truth Q) ✅ COMPLETE
 
 **Goal:** coarsest partition, single-valued before laws.
 **Scope:** must-link via S-views; cannot-link splits using **fixed order**: input_color ≺ sview_image ≺ parity; conjugated reads only to *check* single-valuedness; no output-derived predicates.
 **Reviewer produces:** tests that random train order yields same classes; explicit failure if any class is multi-valued.
 **Done when:** receipts log split steps; I-4 single-valuedness passes.
 
-# WO-07 — Shape law + pullback
+# WO-07 — Shape law + pullback ✅ COMPLETE
 
 **Goal:** size change correctness.
 **Scope:** fit affine (multiplicative ≺ additive ≺ mixed); bbox fallback only if affine fails; `shape_inv` floor mapping; OOB=undefined only.
 **Reviewer produces:** multiplicative and additive goldens; partial pullback coverage tests; precedence tests.
 **Done when:** receipts show type and params; goldens pass.
 
-# WO-08 — KEEP law (admissibility engine)
+# WO-08 — KEEP law (admissibility engine) ✅ COMPLETE
 
 **Goal:** copy laws proven, never partial.
 **Scope:** neutral descriptors for views (identity, d4_k, translate Δ, residue_shift, tile*, block_inverse, offset); `make_view`; admissibility via conjugation; **reject if undefined on any training pixel of the class**.
