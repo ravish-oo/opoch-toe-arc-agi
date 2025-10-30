@@ -1,0 +1,287 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ARC Solver Receipts",
+    "type": "object",
+    "required": [
+        "version",
+        "task_id",
+        "sections"
+    ],
+    "properties": {
+        "version": {
+            "type": "string",
+            "const": "1.0.0"
+        },
+        "task_id": {
+            "type": "string"
+        },
+        "sections": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "present": {
+                    "type": "object",
+                    "required": [
+                        "palette_map",
+                        "d4_ops",
+                        "anchors",
+                        "round_trip_ok"
+                    ],
+                    "properties": {
+                        "palette_map": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        },
+                        "d4_ops": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        },
+                        "anchors": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "array",
+                                "items": {
+                                    "type": "integer"
+                                },
+                                "minItems": 2,
+                                "maxItems": 2
+                            }
+                        },
+                        "round_trip_ok": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "sviews": {
+                    "type": "object",
+                    "required": [
+                        "count",
+                        "depth_max",
+                        "views"
+                    ],
+                    "properties": {
+                        "count": {
+                            "type": "integer"
+                        },
+                        "depth_max": {
+                            "type": "integer"
+                        },
+                        "views": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": [
+                                    "kind",
+                                    "domain_size",
+                                    "proof_ok"
+                                ],
+                                "properties": {
+                                    "kind": {
+                                        "type": "string"
+                                    },
+                                    "domain_size": {
+                                        "type": "integer"
+                                    },
+                                    "proof_ok": {
+                                        "type": "boolean"
+                                    },
+                                    "meta": {
+                                        "type": "object",
+                                        "additionalProperties": true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "truth": {
+                    "type": "object",
+                    "required": [
+                        "splits",
+                        "final_classes",
+                        "single_valued_ok"
+                    ],
+                    "properties": {
+                        "splits": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": [
+                                    "class_id",
+                                    "predicate",
+                                    "parts"
+                                ],
+                                "properties": {
+                                    "class_id": {
+                                        "type": "integer"
+                                    },
+                                    "predicate": {
+                                        "type": "string",
+                                        "enum": [
+                                            "input_color",
+                                            "sview_image",
+                                            "parity"
+                                        ]
+                                    },
+                                    "parts": {
+                                        "type": "integer"
+                                    }
+                                }
+                            }
+                        },
+                        "final_classes": {
+                            "type": "integer"
+                        },
+                        "single_valued_ok": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "shape": {
+                    "type": "object",
+                    "required": [
+                        "type",
+                        "law",
+                        "verified_on"
+                    ],
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "multiplicative",
+                                "additive",
+                                "mixed",
+                                "bbox"
+                            ]
+                        },
+                        "law": {
+                            "type": "array",
+                            "items": {
+                                "type": "integer"
+                            },
+                            "minItems": 4,
+                            "maxItems": 4
+                        },
+                        "verified_on": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "laws": {
+                    "type": "object",
+                    "required": [
+                        "admitted"
+                    ],
+                    "properties": {
+                        "admitted": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": [
+                                    "class_id",
+                                    "descriptor",
+                                    "proof"
+                                ],
+                                "properties": {
+                                    "class_id": {
+                                        "type": "integer"
+                                    },
+                                    "descriptor": {
+                                        "type": "string"
+                                    },
+                                    "proof": {
+                                        "type": "object",
+                                        "additionalProperties": true
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "selection": {
+                    "type": "object",
+                    "required": [
+                        "status",
+                        "assignment",
+                        "cost_order"
+                    ],
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": [
+                                "exact",
+                                "missing_descriptor"
+                            ]
+                        },
+                        "assignment": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        },
+                        "cost_order": {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "missing": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "class_id": {
+                                        "type": "integer"
+                                    },
+                                    "examples": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "integer"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "paint": {
+                    "type": "object",
+                    "required": [
+                        "pixels_total",
+                        "pixels_painted",
+                        "coverage_pct",
+                        "by_law"
+                    ],
+                    "properties": {
+                        "pixels_total": {
+                            "type": "integer"
+                        },
+                        "pixels_painted": {
+                            "type": "integer"
+                        },
+                        "coverage_pct": {
+                            "type": "number"
+                        },
+                        "by_law": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "integer"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "extras": {
+            "type": "object",
+            "additionalProperties": true
+        }
+    }
+}
