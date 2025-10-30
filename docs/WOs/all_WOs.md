@@ -23,7 +23,7 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Reviewer produces:** I-1 assertions on sample grids; D4 tie-break tests; palette canon tie rules.
 **Done when:** byte-exact round-trip on inputs/outputs; receipts emitted.
 
-# WO-03 — S-views v1 (identity, D4-preserving, overlap translations)
+# WO-03 — S-views v1 (identity, D4-preserving, overlap translations) ✅ COMPLETE
 
 **Goal:** build the first proof basis.
 **Scope:** admit identity; detect D4 symmetries that preserve test input; enumerate overlap translations with proof; closure depth=2, cap=128.

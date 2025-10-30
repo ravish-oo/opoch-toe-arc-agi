@@ -8,6 +8,7 @@ Usage:
 """
 
 import sys
+import os
 import argparse
 import random
 
@@ -26,7 +27,7 @@ def main():
     parser.add_argument(
         "--selfcheck",
         type=str,
-        choices=["morphisms", "present"],
+        choices=["morphisms", "present", "sviews"],
         help="Module to self-check"
     )
     parser.add_argument(
@@ -60,6 +61,15 @@ def main():
         present.init()
         print(f"✓ morphisms self-check passed")
         print(f"✓ present self-check passed")
+    elif args.selfcheck == "sviews":
+        import morphisms
+        import sviews
+        morphisms.init()
+        # Set environment variable for self-check
+        os.environ["ARC_SELF_CHECK"] = "1"
+        sviews.init()
+        print(f"✓ morphisms self-check passed")
+        print(f"✓ sviews self-check passed")
 
     # Finalize and print
     doc = receipts.finalize()
