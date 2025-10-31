@@ -219,3 +219,6 @@ receipts_*
 sweep_100_report.txt
 sweep_100*
 sweep_comparison_summary.txt
+sweep_arc1_full.txt
+sweep_arc2_full.txt
+.DS_Store

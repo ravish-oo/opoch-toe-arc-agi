@@ -212,6 +212,68 @@ def compute_image_signature(view: SView, grid_shape: Shape) -> str:
 
 
 # ============================================================================
+# 4-CONNECTED COMPONENT EXTRACTION (WO-Truth-EQUALITIES-STRICT)
+# ============================================================================
+
+
+def _extract_4connected_components(pixel_set: List[Coord], H: int, W: int) -> List[List[Coord]]:
+    """
+    Extract 4-connected components from a set of pixels using deterministic BFS.
+
+    Args:
+        pixel_set: List of (i, j) coordinates
+        H, W: Grid dimensions
+
+    Returns:
+        List of components, each a list of coordinates, sorted by anchor (min row-major pixel)
+    """
+    if not pixel_set:
+        return []
+
+    from collections import deque
+
+    # Convert to set for O(1) lookup
+    remaining = set(pixel_set)
+    components = []
+
+    # Fixed neighbor order: up, down, left, right
+    neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    # Process in row-major order
+    sorted_pixels = sorted(pixel_set, key=lambda p: (p[0], p[1]))
+
+    for start_pixel in sorted_pixels:
+        if start_pixel not in remaining:
+            continue
+
+        # BFS from start_pixel
+        component = []
+        queue = deque([start_pixel])
+        remaining.remove(start_pixel)
+
+        while queue:
+            i, j = queue.popleft()
+            component.append((i, j))
+
+            # Explore 4-neighbors in fixed order
+            for di, dj in neighbors:
+                ni, nj = i + di, j + dj
+                neighbor = (ni, nj)
+                if (0 <= ni < H and 0 <= nj < W and neighbor in remaining):
+                    remaining.remove(neighbor)
+                    queue.append(neighbor)
+
+        # Sort component row-major for determinism
+        component.sort(key=lambda p: (p[0], p[1]))
+        components.append(component)
+
+    # Sort components by anchor (first pixel row-major)
+    components.sort(key=lambda comp: (comp[0][0], comp[0][1]))
+
+    return components
+
+
+# ============================================================================
 # BASE VIEWS (identity, D4-preserving, overlap translations)
 # ============================================================================
 
@@ -299,109 +361,145 @@ def build_base_views(G: IntGrid) -> List[SView]:
             )
             views.append(d4_view)
 
-    # 3. Residue-k periods (WO-04)
-    # Row-wise residue
+    # 3. Residue-k periods (WO-Truth-EQUALITIES-STRICT)
+    # Admit per-residue-class partial S-views (spec: 02-locks-and-minispecs.md:176-177)
+    # For period p, admit one S-view per residue class r ∈ {0, ..., p-1}
+    # Domain = {positions where j≡r mod p AND G[i,j]=G[i,j+p]} for rows
+
+    # Row-wise residue classes
     gcd_row, _ = minimal_row_period(G)
     if gcd_row > 1 and gcd_row < W:
-        # Proof: Check G[i,j] = G[i,(j+p)%W] for all i,j
-        is_row_residue = True
-        for i in range(H):
-            for j in range(W):
-                j_shifted = (j + gcd_row) % W
-                if G[i][j] != G[i][j_shifted]:
-                    is_row_residue = False
-                    break
-            if not is_row_residue:
-                break
+        for r in range(gcd_row):
+            # Build equality domain for residue class r
+            domain = []
+            for i in range(H):
+                for j in range(W):
+                    # Check: j ≡ r mod p AND j+p in bounds AND G[i,j] = G[i,j+p]
+                    if j % gcd_row == r:
+                        j_shifted = j + gcd_row
+                        if j_shifted < W and G[i][j] == G[i][j_shifted]:
+                            domain.append((i, j))
 
-        if is_row_residue:
-            # Create apply function for row residue
-            def make_row_residue_apply(p, width):
+            if len(domain) < 2:
+                continue  # Need at least 2 pixels to form a view
+
+            # Create apply function for this residue class
+            def make_row_residue_apply(p, r_val, dom_set, width):
                 def apply_fn(x):
+                    # Only defined on domain
+                    if x not in dom_set:
+                        return None
                     i, j = x
-                    j_shifted = (j + p) % width
-                    return (i, j_shifted)
+                    j_shifted = j + p
+                    if j_shifted < width:
+                        return (i, j_shifted)
+                    return None
                 return apply_fn
 
+            dom_set = set(domain)
             residue_row_view = SView(
                 kind="residue",
-                params={"axis": "row", "p": gcd_row},
-                dom_size=H * W,
-                apply_fn=make_row_residue_apply(gcd_row, W)
+                params={"axis": "row", "p": gcd_row, "r": r},
+                dom_size=len(domain),
+                apply_fn=make_row_residue_apply(gcd_row, r, dom_set, W)
             )
             views.append(residue_row_view)
 
-    # Column-wise residue
+    # Column-wise residue classes
     gcd_col, _ = minimal_col_period(G)
     if gcd_col > 1 and gcd_col < H:
-        # Proof: Check G[i,j] = G[(i+p)%H,j] for all i,j
-        is_col_residue = True
-        for i in range(H):
-            for j in range(W):
-                i_shifted = (i + gcd_col) % H
-                if G[i][j] != G[i_shifted][j]:
-                    is_col_residue = False
-                    break
-            if not is_col_residue:
-                break
+        for r in range(gcd_col):
+            # Build equality domain for residue class r
+            domain = []
+            for i in range(H):
+                for j in range(W):
+                    # Check: i ≡ r mod p AND i+p in bounds AND G[i,j] = G[i+p,j]
+                    if i % gcd_col == r:
+                        i_shifted = i + gcd_col
+                        if i_shifted < H and G[i][j] == G[i_shifted][j]:
+                            domain.append((i, j))
 
-        if is_col_residue:
-            # Create apply function for col residue
-            def make_col_residue_apply(p, height):
+            if len(domain) < 2:
+                continue  # Need at least 2 pixels to form a view
+
+            # Create apply function for this residue class
+            def make_col_residue_apply(p, r_val, dom_set, height):
                 def apply_fn(x):
+                    # Only defined on domain
+                    if x not in dom_set:
+                        return None
                     i, j = x
-                    i_shifted = (i + p) % height
-                    return (i_shifted, j)
+                    i_shifted = i + p
+                    if i_shifted < height:
+                        return (i_shifted, j)
+                    return None
                 return apply_fn
 
+            dom_set = set(domain)
             residue_col_view = SView(
                 kind="residue",
-                params={"axis": "col", "p": gcd_col},
-                dom_size=H * W,
-                apply_fn=make_col_residue_apply(gcd_col, H)
+                params={"axis": "col", "p": gcd_col, "r": r},
+                dom_size=len(domain),
+                apply_fn=make_col_residue_apply(gcd_col, r, dom_set, H)
             )
             views.append(residue_col_view)
 
-    # 4. Overlap translations
-    # Enumerate Δ in lex order on (|di|+|dj|, di, dj)
-    # Bounded by grid size
+    # 4. Overlap translations (WO-Truth-EQUALITIES-STRICT)
+    # Admit local equality domains as partial S-views (spec: 00-math-spec.md:47-50)
+    # Build E_Δ = {x : G(x) = G(x+Δ)}, extract 4-connected components, admit each
+    # Cap: Stop when budget (128 - current views) is exhausted
+
+    # Enumerate Δ in lex order on (|di|+|dj|, di, dj), limited to small distances
+    max_delta_dist = min(max(H, W), 20)  # Cap delta enumeration for performance
     deltas = []
-    for di in range(-H + 1, H):
-        for dj in range(-W + 1, W):
+    for di in range(-max_delta_dist, max_delta_dist + 1):
+        for dj in range(-max_delta_dist, max_delta_dist + 1):
             if di == 0 and dj == 0:
                 continue  # Skip identity
-            deltas.append((di, dj))
+            # Only consider deltas that create non-empty overlap
+            if abs(di) < H and abs(dj) < W:
+                deltas.append((di, dj))
 
     # Sort by (|di|+|dj|, di, dj)
     deltas.sort(key=lambda d: (abs(d[0]) + abs(d[1]), d[0], d[1]))
 
+    # Process deltas with early termination at cap (128 total S-views)
+    max_views = 128
     for di, dj in deltas:
-        # Compute overlap domain: Ω ∩ (Ω + Δ)
-        overlap = []
+        # Early termination: stop if we've hit the cap
+        if len(views) >= max_views:
+            break
+        # Build E_Δ = equality mask where G(x) = G(x+Δ)
+        equality_mask = []
         for i in range(H):
             for j in range(W):
                 i_shifted = i + di
                 j_shifted = j + dj
-                if 0 <= i_shifted < H and 0 <= j_shifted < W:
-                    overlap.append((i, j))
+                # Check both in bounds and equal
+                if (0 <= i_shifted < H and 0 <= j_shifted < W and
+                    G[i][j] == G[i_shifted][j_shifted]):
+                    equality_mask.append((i, j))
 
-        if len(overlap) == 0:
-            continue
+        if len(equality_mask) < 2:
+            continue  # Need at least 2 pixels to form a view
 
-        # Check proof: G[x] == G[x + Δ] for all x in overlap
-        is_equal = True
-        for x in overlap:
-            i, j = x
-            i_shifted = i + di
-            j_shifted = j + dj
-            if G[i][j] != G[i_shifted][j_shifted]:
-                is_equal = False
-                break
+        # Extract 4-connected components of E_Δ (deterministic BFS)
+        components = _extract_4connected_components(equality_mask, H, W)
 
-        if is_equal:
+        # Admit one S-view per component (if size ≥ 2)
+        for comp_idx, component in enumerate(components):
+            if len(component) < 2:
+                continue
+
+            # Compute component anchor for deterministic naming
+            anchor = min(component, key=lambda p: (p[0], p[1]))
+
             # Create apply function for this translation
-            def make_translate_apply(delta):
+            def make_translate_apply(delta, comp_set):
                 def apply_fn(x):
+                    # Only defined on component domain
+                    if x not in comp_set:
+                        return None
                     i, j = x
                     i_shifted = i + delta[0]
                     j_shifted = j + delta[1]
@@ -410,11 +508,12 @@ def build_base_views(G: IntGrid) -> List[SView]:
                     return None
                 return apply_fn
 
+            comp_set = set(component)
             translate_view = SView(
                 kind="translate",
-                params={"di": di, "dj": dj},
-                dom_size=len(overlap),
-                apply_fn=make_translate_apply((di, dj))
+                params={"di": di, "dj": dj, "comp_anchor": anchor},
+                dom_size=len(component),
+                apply_fn=make_translate_apply((di, dj), comp_set)
             )
             views.append(translate_view)
 

@@ -229,9 +229,11 @@ def build_pt_predicates(
     residue_meta: Dict[str, int]
 ) -> Tuple[List[Tuple[str, str, List[Coord]]], Dict[str, int]]:
     """
-    Build small, lawful PT predicate basis: components + residue + overlap + bands + shells.
+    Build spec-aligned PT predicate basis: membership_in_Sview_image only.
 
-    WO-TB: Extended with walls/bands/shells (input-only structural masks).
+    WO-Truth-EQUALITIES-STRICT: Removed bands/shells (not in spec).
+    Spec (02-locks-and-minispecs.md:186): "membership_in_Sview_image (includes
+    component masks, residue-k images, overlap images)"
 
     Args:
         G_test: Presented test input
@@ -242,15 +244,13 @@ def build_pt_predicates(
     Returns:
         (predicates, counts) where:
             predicates: List of (kind, name, mask) tuples
-            counts: {"components": int, "residue_row": int, "residue_col": int, "overlap": int,
-                    "bands_h": int, "bands_v": int, "shells": int}
+            counts: {"components": int, "residue_row": int, "residue_col": int, "overlap": int}
     """
     H = len(G_test)
     W = len(G_test[0]) if H > 0 else 0
 
     preds = []
-    counts = {"components": 0, "residue_row": 0, "residue_col": 0, "overlap": 0,
-              "bands_h": 0, "bands_v": 0, "shells": 0}
+    counts = {"components": 0, "residue_row": 0, "residue_col": 0, "overlap": 0}
 
     # A) Component masks - one predicate per component
     for c in components:
@@ -322,54 +322,6 @@ def build_pt_predicates(
     for _, di, dj, mask in overlap_candidates[:16]:
         preds.append(("overlap", f"di={di:+d},dj={dj:+d}", mask))
         counts["overlap"] += 1
-
-    # D) WO-TB: Walls and bands (input-only structural masks)
-    # Detect wall rows (all same color) and wall cols (all same color)
-    wall_rows = []
-    for r in range(H):
-        if W > 0 and all(G_test[r][c] == G_test[r][0] for c in range(W)):
-            wall_rows.append(r)
-
-    wall_cols = []
-    for c in range(W):
-        if H > 0 and all(G_test[r][c] == G_test[0][c] for r in range(H)):
-            wall_cols.append(c)
-
-    # Horizontal bands: intervals between adjacent wall rows
-    row_cuts = [-1] + sorted(wall_rows) + [H]
-    for a, b in zip(row_cuts[:-1], row_cuts[1:]):
-        top = a + 1
-        bot = b - 1
-        if top <= bot:
-            # Band exists: [top..bot]
-            mask = [(r, c) for r in range(top, bot + 1) for c in range(W)]
-            preds.append(("band_h", f"[{top}..{bot}]", mask))
-            counts["bands_h"] += 1
-
-    # Vertical bands: intervals between adjacent wall cols
-    col_cuts = [-1] + sorted(wall_cols) + [W]
-    for a, b in zip(col_cuts[:-1], col_cuts[1:]):
-        left = a + 1
-        right = b - 1
-        if left <= right:
-            # Band exists: [left..right]
-            mask = [(r, c) for r in range(H) for c in range(left, right + 1)]
-            preds.append(("band_v", f"[{left}..{right}]", mask))
-            counts["bands_v"] += 1
-
-    # E) WO-TB: Shells (k-rings from border by Manhattan distance)
-    for k in range(max(H, W) if H > 0 and W > 0 else 0):
-        shell = []
-        for r in range(H):
-            for c in range(W):
-                # Manhattan distance from border
-                d = min(r, H - 1 - r, c, W - 1 - c)
-                if d == k:
-                    shell.append((r, c))
-        if not shell:
-            break  # No more shells
-        preds.append(("shell", f"k={k}", shell))
-        counts["shells"] += 1
 
     return (preds, counts)
 
@@ -1265,151 +1217,6 @@ def _self_check_truth() -> Dict:
         }
         receipt["single_valued_ok"] = False
         return receipt
-
-    # ========================================================================
-    # Check 5: WO-TB Wall/band split
-    # ========================================================================
-    # Grid with wall row at r=2 (all same color) and non-wall rows with variations
-    G5 = [
-        [1, 2, 1],  # Non-wall (has variation)
-        [2, 1, 2],  # Non-wall (has variation)
-        [5, 5, 5],  # Wall row (all same color)
-        [3, 4, 3],  # Non-wall (has variation)
-        [4, 3, 4]   # Non-wall (has variation)
-    ]
-
-    P_test_5 = (0, (0, 0), (5, 3))
-    P_out_by_id_5 = {0: (0, (0, 0), (5, 3))}
-
-    # Training output where different bands get different colors
-    Y5_0 = [
-        [7, 7, 7],  # Rows 0-1 → color 7
-        [7, 7, 7],
-        [8, 8, 8],  # Wall → color 8
-        [9, 9, 9],  # Rows 3-4 → color 9
-        [9, 9, 9]
-    ]
-
-    frames5 = {"P_test": P_test_5, "P_out": P_out_by_id_5}
-    train_outputs_5 = [(0, Y5_0)]
-
-    # Start with all in same class (contradictory)
-    uf5 = UnionFind(15)
-    for i in range(14):
-        uf5.union(0, i + 1)
-
-    cid_of_5_after_mustlink = uf5.get_classes()
-
-    # Build predicates to check bands are detected
-    predicates5, counts5 = build_pt_predicates(G5, [], [], {"row_gcd": 1, "col_gcd": 1})
-
-    if counts5["bands_h"] == 0:
-        receipt["examples"]["case"] = "TB_wall_band"
-        receipt["examples"]["detail"] = {
-            "note": "Expected horizontal bands detected (wall at r=2)",
-            "bands_h_count": 0
-        }
-        receipt["single_valued_ok"] = False
-        return receipt
-
-    # Run PT refinement - should split using band predicate
-    try:
-        cid_of_5_final, splits5, _ = paige_tarjan_refine(
-            G5, cid_of_5_after_mustlink, [], [], {"row_gcd": 1, "col_gcd": 1},
-            frames5, train_outputs_5
-        )
-
-        # Check that at least one split used a band predicate
-        band_split_found = False
-        for split in splits5:
-            if "predicate" in split and split["predicate"] == "sview_image":
-                # Check if it was a band split by verifying parts >= 2
-                if split.get("parts", 0) >= 2:
-                    band_split_found = True
-                    break
-
-        # Note: We don't assert band_split_found here because input_color may split first
-        # The important check is that bands were detected (counts5["bands_h"] > 0)
-
-    except AssertionError:
-        # PT may fail if splits aren't sufficient - that's expected for this test
-        pass
-
-    # ========================================================================
-    # Check 6: WO-TB Shell split
-    # ========================================================================
-    # Grid where pixels at different shell distances have contradictory colors
-    G6 = [
-        [1, 1, 1, 1],
-        [1, 2, 2, 1],
-        [1, 2, 2, 1],
-        [1, 1, 1, 1]
-    ]
-
-    P_test_6 = (0, (0, 0), (4, 4))
-    P_out_by_id_6 = {0: (0, (0, 0), (4, 4))}
-
-    # Training output where shell k=0 (border) gets color 5, shell k=1 (inner) gets color 6
-    Y6_0 = [
-        [5, 5, 5, 5],  # Shell k=0
-        [5, 6, 6, 5],  # Shell k=1 inside
-        [5, 6, 6, 5],
-        [5, 5, 5, 5]
-    ]
-
-    frames6 = {"P_test": P_test_6, "P_out": P_out_by_id_6}
-    train_outputs_6 = [(0, Y6_0)]
-
-    # Start with all in same class (contradictory)
-    uf6 = UnionFind(16)
-    for i in range(15):
-        uf6.union(0, i + 1)
-
-    cid_of_6_after_mustlink = uf6.get_classes()
-
-    # Build predicates to check shells are detected
-    predicates6, counts6 = build_pt_predicates(G6, [], [], {"row_gcd": 1, "col_gcd": 1})
-
-    if counts6["shells"] == 0:
-        receipt["examples"]["case"] = "TB_shell"
-        receipt["examples"]["detail"] = {
-            "note": "Expected shells detected",
-            "shells_count": 0
-        }
-        receipt["single_valued_ok"] = False
-        return receipt
-
-    # Verify at least 2 shells detected (k=0 border, k=1 inner)
-    if counts6["shells"] < 2:
-        receipt["examples"]["case"] = "TB_shell"
-        receipt["examples"]["detail"] = {
-            "note": "Expected at least 2 shells (k=0 border, k=1 inner)",
-            "shells_count": counts6["shells"]
-        }
-        receipt["single_valued_ok"] = False
-        return receipt
-
-    # Run PT refinement - should split using shell predicate
-    try:
-        cid_of_6_final, splits6, _ = paige_tarjan_refine(
-            G6, cid_of_6_after_mustlink, [], [], {"row_gcd": 1, "col_gcd": 1},
-            frames6, train_outputs_6
-        )
-
-        # Check that at least one split used a shell/sview_image predicate
-        shell_split_found = False
-        for split in splits6:
-            if "predicate" in split and split["predicate"] == "sview_image":
-                if split.get("parts", 0) >= 2:
-                    shell_split_found = True
-                    break
-
-        # Note: We don't assert shell_split_found here because input_color may split first
-        # The important check is that shells were detected (counts6["shells"] >= 2)
-
-    except AssertionError:
-        # PT may fail if splits aren't sufficient - that's expected for this test
-        pass
 
     # Final receipt (all checks passed)
     receipt["final_classes"] = num_classes_1
