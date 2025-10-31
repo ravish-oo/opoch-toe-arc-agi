@@ -67,7 +67,15 @@ def run_task_once(
     train_pairs = task_data["train"]
     test_pairs = task_data.get("test", [])
 
-    # Reverse train order if requested
+    # WO-ND1/ND2: Fix test input BEFORE reversing train order for determinism
+    if len(test_pairs) > 0:
+        Xtest_raw = test_pairs[0]["input"]
+    else:
+        # No test input - use ORIGINAL first training input as proxy
+        # (must be fixed before reversing to ensure determinism)
+        Xtest_raw = train_pairs[0]["input"]
+
+    # Reverse train order if requested (AFTER fixing test input)
     if train_order == "rev":
         train_pairs = list(reversed(train_pairs))
 
@@ -82,13 +90,6 @@ def run_task_once(
     # 1. Present all grids
     morphisms.init()
     present.init()
-
-    # Use first test input for test frame
-    if len(test_pairs) > 0:
-        Xtest_raw = test_pairs[0]["input"]
-    else:
-        # No test input - use first training input as proxy
-        Xtest_raw = Xin_raw[0]
 
     # Build palette map (train inputs + test input)
     Π = present.build_palette_map(Xin_raw, Xtest_raw)
@@ -158,16 +159,36 @@ def run_task_once(
         if hasattr(largest_comp, 'color') and hasattr(largest_comp, 'size'):
             largest = {"color": largest_comp.color, "size": largest_comp.size}
 
+    # WO-ND1: Build order keys and hash for determinism verification
+    import hashlib
+    order_keys = []
+    for comp in components_list:
+        order_keys.append([
+            comp.color,
+            comp.comp_id,
+            list(comp.anchor),
+            len(comp.mask)
+        ])
+
+    # Compute order_hash (SHA256 of order keys)
+    order_hash = hashlib.sha256(str(order_keys).encode('utf-8')).hexdigest()
+
+    # Format anchors_first5 per WO-ND1 spec
     anchors_first5 = []
     for comp in components_list[:5]:
-        if hasattr(comp, 'anchor'):
-            anchors_first5.append(list(comp.anchor))
+        anchors_first5.append({
+            "color": comp.color,
+            "id": comp.comp_id,
+            "anchor": list(comp.anchor),
+            "size": len(comp.mask)
+        })
 
     receipts.log("components", {
         "count_total": len(components_list),
         "by_color": by_color,
         "largest": largest,
         "anchors_first5": anchors_first5,
+        "order_hash": order_hash,
         "proof_reconstruct_ok": True,
         "examples": {}
     })

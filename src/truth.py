@@ -406,7 +406,8 @@ def paige_tarjan_refine(
 
         # Scan classes in ascending order
         for cid in sorted(classes_map.keys()):
-            coords = classes_map[cid]
+            # WO-ND2: Sort coords row-major for deterministic iteration
+            coords = sorted(classes_map[cid], key=lambda p: (p[0], p[1]))
 
             # Check for contradiction via outputs
             colors_by_train = []
@@ -417,7 +418,9 @@ def paige_tarjan_refine(
                 H_out = len(Y_i)
                 W_out = len(Y_i[0]) if H_out > 0 else 0
 
-                colors_this_train = set()
+                # WO-ND2: Build colors_seen as list (order of first encounter)
+                colors_seen_list = []
+                colors_seen_set = set()
                 witness_coord = None
 
                 for x in coords:
@@ -427,27 +430,34 @@ def paige_tarjan_refine(
 
                     r, c = coord_out
                     if 0 <= r < H_out and 0 <= c < W_out:
-                        colors_this_train.add(Y_i[r][c])
+                        color = Y_i[r][c]
+                        if color not in colors_seen_set:
+                            colors_seen_list.append(color)
+                            colors_seen_set.add(color)
                         if not witness_coord:
                             witness_coord = coord_out
 
-                if colors_this_train:
-                    colors_by_train.append((train_idx, colors_this_train, witness_coord))
+                if colors_seen_list:
+                    colors_by_train.append((train_idx, colors_seen_list, witness_coord))
 
-            # Gather all colors seen
-            all_colors = set()
-            for _, colors, _ in colors_by_train:
-                all_colors.update(colors)
+            # Gather all colors seen (preserve first-seen order)
+            all_colors_list = []
+            all_colors_set = set()
+            for _, colors_list, _ in colors_by_train:
+                for c in colors_list:
+                    if c not in all_colors_set:
+                        all_colors_list.append(c)
+                        all_colors_set.add(c)
 
             # If ≥2 colors, we have contradiction
-            if len(all_colors) < 2:
+            if len(all_colors_list) < 2:
                 continue  # No contradiction, class is fine
 
             # Find witness (first training with multiple colors or first conflict)
             witness_train = -1
             witness_coord_out = None
-            for train_idx, colors, coord in colors_by_train:
-                if len(colors) > 1:
+            for train_idx, colors_list, coord in colors_by_train:
+                if len(colors_list) > 1:
                     witness_train = train_idx
                     witness_coord_out = coord
                     break
@@ -483,13 +493,20 @@ def paige_tarjan_refine(
                 if parts_count < 2:
                     continue
 
-                # Split: reassign cid_of for each part
-                parts_list = sorted(pred_values.items(), key=lambda kv: kv[0])
-                new_cids = []
+                # WO-ND2: Sort parts by smallest row-major pixel in each bucket
+                parts_with_min = []
+                for val, part_coords in pred_values.items():
+                    min_pixel = min(part_coords, key=lambda p: (p[0], p[1]))
+                    parts_with_min.append((min_pixel, val, part_coords))
 
-                for part_idx, (val, part_coords) in enumerate(parts_list):
+                # Sort by smallest pixel row-major
+                parts_with_min.sort(key=lambda t: (t[0][0], t[0][1]))
+
+                # Assign cids: first bucket keeps old cid, rest get new cids
+                new_cids = []
+                for part_idx, (min_pixel, val, part_coords) in enumerate(parts_with_min):
                     if part_idx == 0:
-                        # Reuse old cid for first part
+                        # Reuse old cid for first part (smallest pixel)
                         new_cid = cid
                     else:
                         # Allocate new cid (monotonic)
@@ -507,12 +524,12 @@ def paige_tarjan_refine(
                 splits.append({
                     "cid": cid,
                     "predicate": pred_name,
-                    "parts": len(parts_list),
-                    "sizes": [len(p[1]) for p in parts_list],
+                    "parts": len(parts_with_min),
+                    "sizes": [len(t[2]) for t in parts_with_min],
                     "witness": {
                         "train_idx": witness_train,
                         "coord_out": list(witness_coord_out) if witness_coord_out else None,
-                        "colors_seen": sorted(all_colors)
+                        "colors_seen": all_colors_list  # WO-ND2: Use list instead of sorted set
                     }
                 })
 
@@ -525,7 +542,7 @@ def paige_tarjan_refine(
                 # Build diagnostic payload
                 pt_last_contradiction = {
                     "cid": cid,
-                    "colors_seen": sorted(all_colors),
+                    "colors_seen": all_colors_list,  # WO-ND2: Use list (first-seen order)
                     "witness": list(witness_coord_out) if witness_coord_out else None,
                     "tried": tried_predicates
                 }
@@ -533,7 +550,7 @@ def paige_tarjan_refine(
                 # Store in a way that build_truth_partition can access
                 raise AssertionError(
                     f"PT failed: class {cid} has contradiction but no predicate splits it. "
-                    f"colors_seen={sorted(all_colors)}, witness={witness_coord_out}|||"
+                    f"colors_seen={all_colors_list}, witness={witness_coord_out}|||"
                     f"DIAGNOSTIC:{pt_last_contradiction}"
                 )
 

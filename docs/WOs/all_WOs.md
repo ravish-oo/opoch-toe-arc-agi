@@ -99,8 +99,8 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Done when:** training set equals official outputs; no `missing_descriptor`; submission driver ready.
 
 
-# WO-ND1 — Make components deterministic (and prove it in receipts)
-# WO-ND2 — Make truth Paige–Tarjan deterministic (and prove it)
+# WO-ND1 — Make components deterministic (and prove it in receipts)  ✅ COMPLETE
+# WO-ND2 — Make truth Paige–Tarjan deterministic (and prove it)  ✅ COMPLETE
 ---
 
 ## Why this sequence guarantees coverage by the last WO

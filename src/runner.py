@@ -137,16 +137,36 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
         if hasattr(largest_comp, 'color') and hasattr(largest_comp, 'size'):
             largest = {"color": largest_comp.color, "size": largest_comp.size}
 
+    # WO-ND1: Build order keys and hash for determinism verification
+    order_keys = []
+    for comp in components_list:
+        order_keys.append([
+            comp.color,
+            comp.comp_id,
+            list(comp.anchor),
+            len(comp.mask)
+        ])
+
+    # Compute order_hash (SHA256 of order keys)
+    import hashlib
+    order_hash = hashlib.sha256(str(order_keys).encode('utf-8')).hexdigest()
+
+    # Format anchors_first5 per WO-ND1 spec
     anchors_first5 = []
     for comp in components_list[:5]:
-        if hasattr(comp, 'anchor'):
-            anchors_first5.append(list(comp.anchor))
+        anchors_first5.append({
+            "color": comp.color,
+            "id": comp.comp_id,
+            "anchor": list(comp.anchor),
+            "size": len(comp.mask)
+        })
 
     receipts.log("components", {
         "count_total": len(components_list),
         "by_color": by_color,
         "largest": largest,
         "anchors_first5": anchors_first5,
+        "order_hash": order_hash,
         "proof_reconstruct_ok": True,  # Assume OK (would fail in init() if not)
         "examples": {}
     })
