@@ -101,6 +101,8 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 
 # WO-ND1 — Make components deterministic (and prove it in receipts)  ✅ COMPLETE
 # WO-ND2 — Make truth Paige–Tarjan deterministic (and prove it)  ✅ COMPLETE
+
+# WO-TB **(Truth Bands)** that extends the Paige–Tarjan (PT) predicate basis with **input-only**, fully provable separators: **walls, inter-wall bands, and border shells**.
 ---
 
 ## Why this sequence guarantees coverage by the last WO

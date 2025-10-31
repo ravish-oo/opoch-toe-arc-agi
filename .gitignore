@@ -216,3 +216,4 @@ receipts/*
 !receipts/.gitkeep
 test_results.json
 receipts_*
+sweep_100_report.txt

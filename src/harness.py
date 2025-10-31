@@ -409,15 +409,180 @@ def main():
         help="Extract and print WHY from receipts"
     )
     parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Run corpus sweep to map failure distribution"
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Limit number of tasks to run in sweep (default: all)"
+    )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=3,
+        help="Number of sample task IDs to show per bucket (default: 3)"
+    )
+    parser.add_argument(
+        "--print-samples",
+        action="store_true",
+        help="Print detailed samples for atoms (witness, component_size, etc.)"
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Print full receipt JSON"
+        help="Print full receipt JSON (or all task IDs per bucket in sweep mode)"
     )
 
     args = parser.parse_args()
 
     # Seed randomness for determinism
     random.seed(1337)
+
+    # Handle --sweep flag
+    if args.sweep:
+        if not args.train_dir:
+            print("ERROR: --sweep requires --train-dir")
+            return 1
+
+        # Load corpus
+        corpus_path = os.path.join(args.train_dir, "arc-agi_training_challenges.json")
+        with open(corpus_path, "r") as f:
+            corpus = json.load(f)
+
+        # Get task IDs in lexicographic order
+        task_ids = sorted(corpus.keys())
+
+        # Apply limit if specified
+        if args.limit:
+            task_ids = task_ids[:args.limit]
+
+        # Initialize buckets
+        buckets = {
+            "present_fail": [],
+            "truth_fail_atom": [],
+            "truth_fail_nonatom": [],
+            "truth_pass_missing_law": [],
+            "paint_fail": [],
+            "full_pass": [],
+            "error": []
+        }
+
+        # Run tasks and bucket
+        total = len(task_ids)
+        for idx, task_id in enumerate(task_ids):
+            # Progress indicator
+            if (idx + 1) % 10 == 0 or idx == 0 or idx == total - 1:
+                print(f"Progress: {idx + 1}/{total} tasks", file=sys.stderr)
+
+            try:
+                # Run task once
+                preds, doc, _ = run_task_once(task_id, args.train_dir, train_order="orig")
+
+                sections = doc.get("sections", {})
+
+                # Bucketing logic
+                # 1. Check present failures
+                present_section = sections.get("present", {})
+                if present_section and not present_section.get("round_trip_ok_inputs", True):
+                    buckets["present_fail"].append((task_id, doc))
+                    continue
+                if present_section and not present_section.get("round_trip_ok_outputs", True):
+                    buckets["present_fail"].append((task_id, doc))
+                    continue
+
+                # 2. Check truth failures
+                truth_section = sections.get("truth", {})
+                if truth_section and not truth_section.get("single_valued_ok", True):
+                    # Determine if atom or non-atom
+                    pt_last = truth_section.get("pt_last_contradiction", {})
+                    witness_prov = pt_last.get("witness_provenance", {})
+                    class_size = witness_prov.get("class_size", 0)
+
+                    if class_size == 1:
+                        buckets["truth_fail_atom"].append((task_id, doc))
+                    else:
+                        buckets["truth_fail_nonatom"].append((task_id, doc))
+                    continue
+
+                # 3. Check sieve/laws missing
+                selection_section = sections.get("selection", {})
+                if selection_section and selection_section.get("status") == "missing_descriptor":
+                    buckets["truth_pass_missing_law"].append((task_id, doc))
+                    continue
+
+                # 4. Check paint failures
+                paint_section = sections.get("paint", {})
+                if paint_section:
+                    idempotent_ok = paint_section.get("idempotent_ok", True)
+                    coverage_pct = paint_section.get("coverage_pct", 0.0)
+
+                    if not idempotent_ok or coverage_pct < 100.0:
+                        buckets["paint_fail"].append((task_id, doc))
+                        continue
+
+                # 5. Full pass
+                if preds is not None:
+                    buckets["full_pass"].append((task_id, doc))
+                else:
+                    # Fallback: unknown failure
+                    buckets["error"].append((task_id, doc))
+
+            except Exception as e:
+                # Catch all exceptions and bucket as error
+                buckets["error"].append((task_id, {"error_msg": str(e)}))
+
+        # Print summary
+        print("\n=== SWEEP SUMMARY ===")
+        print(f"Total tasks: {total}")
+        print()
+
+        # Print bucket counts and samples
+        for bucket_name in ["present_fail", "truth_fail_atom", "truth_fail_nonatom",
+                           "truth_pass_missing_law", "paint_fail", "full_pass", "error"]:
+            bucket = buckets[bucket_name]
+            count = len(bucket)
+            pct = (count / total * 100) if total > 0 else 0.0
+
+            print(f"{bucket_name}: {count} ({pct:.1f}%)")
+
+            # Show samples
+            if args.verbose:
+                # Verbose: show all task IDs
+                if count > 0:
+                    task_ids_str = ", ".join([tid for tid, _ in bucket])
+                    print(f"  Tasks: {task_ids_str}")
+            else:
+                # Normal: show first N samples
+                sample_count = min(args.sample, count)
+                if sample_count > 0:
+                    samples = bucket[:sample_count]
+                    sample_ids = [tid for tid, _ in samples]
+                    print(f"  Samples: {', '.join(sample_ids)}")
+
+                    # Enhanced samples for atoms
+                    if args.print_samples and bucket_name == "truth_fail_atom":
+                        for task_id, doc in samples:
+                            sections = doc.get("sections", {})
+                            truth_section = sections.get("truth", {})
+                            pt_last = truth_section.get("pt_last_contradiction", {})
+                            witness = pt_last.get("witness")
+                            witness_prov = pt_last.get("witness_provenance", {})
+
+                            component = witness_prov.get("component", {})
+                            comp_size = component.get("size", "?")
+                            comp_color = component.get("color", "?")
+
+                            neighbors = witness_prov.get("equal_color_neighbors", {})
+                            n4 = neighbors.get("4-neighborhood", 0)
+                            n8 = neighbors.get("8-neighborhood", 0)
+
+                            print(f"    {task_id}: witness={witness}, comp=(c={comp_color},sz={comp_size}), neighbors=(4={n4},8={n8})")
+
+            print()
+
+        return 0
 
     # Handle --determinism flag
     if args.determinism:
@@ -629,7 +794,6 @@ def main():
 
     # Optionally print full receipt
     if args.verbose:
-        import json
         print(f"\nFull receipt:")
         print(json.dumps(doc, indent=2, sort_keys=True))
 
