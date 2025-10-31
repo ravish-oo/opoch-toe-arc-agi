@@ -398,11 +398,70 @@ def painter_once(
     pixels_painted = sum(by_law.values())
     coverage_pct = 100.0 * pixels_painted / pixels_total if pixels_total > 0 else 0.0
 
+    # Idempotence check: T(T(Y)) = T(Y)
+    # Since T reads only from input (not from Y_out), re-running should give identical output
+    # This verifies determinism (no hidden state/randomness)
+    idempotent_ok = True
+    try:
+        # Re-paint (second pass)
+        Y_out_2 = [[0 for _ in range(W_out)] for _ in range(H_out)]
+        for i_out in range(H_out):
+            for j_out in range(W_out):
+                p_out = (i_out, j_out)
+                p_test = _shape_pullback(p_out, (a, b, c, d), H_test, W_test)
+
+                if p_test is None:
+                    if "⊥" in assignment:
+                        desc_str = assignment["⊥"]
+                        family, params = _parse_descriptor(desc_str)
+                        if family == "CONST":
+                            Y_out_2[i_out][j_out] = params["c"]
+                    continue
+
+                idx_test = p_test[0] * W_test + p_test[1]
+                cid = part.cid_of[idx_test]
+
+                if cid not in assignment:
+                    continue
+
+                desc_str = assignment[cid]
+                family, params = _parse_descriptor(desc_str)
+
+                if family == "KEEP":
+                    view_name = params["view"]
+                    V = _make_view_for_paint(view_name, params, H_test, W_test)
+                    q = V(p_test)
+                    if q is not None and 0 <= q[0] < H_test and 0 <= q[1] < W_test:
+                        Y_out_2[i_out][j_out] = Xtest[q[0]][q[1]]
+                elif family in ["CONST", "UNIQUE", "ARGMAX", "LOWEST_UNUSED"]:
+                    Y_out_2[i_out][j_out] = params["c"]
+                elif family == "RECOLOR":
+                    pi = params["pi"]
+                    cin = Xtest[p_test[0]][p_test[1]]
+                    Y_out_2[i_out][j_out] = pi.get(cin, cin)
+                elif family == "BLOCK":
+                    k = params["k"]
+                    if cid in class_anchors:
+                        anchor = class_anchors[cid]
+                        rel_row = p_test[0] - anchor[0]
+                        rel_col = p_test[1] - anchor[1]
+                        tile_row = rel_row // k
+                        tile_col = rel_col // k
+                        q0 = (anchor[0] + tile_row * k, anchor[1] + tile_col * k)
+                        if 0 <= q0[0] < H_test and 0 <= q0[1] < W_test:
+                            Y_out_2[i_out][j_out] = Xtest[q0[0]][q0[1]]
+
+        # Compare outputs
+        idempotent_ok = (Y_out == Y_out_2)
+    except Exception:
+        idempotent_ok = False
+
     # Log receipts
     receipts.log("paint", {
         "pixels_total": pixels_total,
         "pixels_painted": pixels_painted,
         "coverage_pct": coverage_pct,
+        "idempotent_ok": idempotent_ok,
         "by_law": by_law
     })
 

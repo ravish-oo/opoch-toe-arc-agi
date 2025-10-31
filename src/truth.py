@@ -685,6 +685,78 @@ def paige_tarjan_refine(
                         "8-neighborhood": neighbors_8
                     }
 
+                    # 5. S-view rejection audit for small translates
+                    # Test why small translates weren't admitted (global proof check)
+                    # This distinguishes "true atom" from "missed S-view"
+                    sview_rejections = []
+
+                    # Test small translates: (±1,0), (0,±1), (±1,±1)
+                    test_deltas = [
+                        (1, 0), (-1, 0), (0, 1), (0, -1),  # 4-neighborhood
+                        (1, 1), (1, -1), (-1, 1), (-1, -1)  # Diagonals
+                    ]
+
+                    # Check which translates were actually admitted
+                    admitted_translates = set()
+                    for view in sviews:
+                        if hasattr(view, 'kind') and view.kind == 'translate':
+                            params = view.params if hasattr(view, 'params') else {}
+                            di = params.get('di', 0)
+                            dj = params.get('dj', 0)
+                            admitted_translates.add((di, dj))
+
+                    for di, dj in test_deltas:
+                        # Compute overlap domain: Ω ∩ (Ω + Δ)
+                        overlap = []
+                        for i in range(H):
+                            for j in range(W):
+                                i_shifted = i + di
+                                j_shifted = j + dj
+                                if 0 <= i_shifted < H and 0 <= j_shifted < W:
+                                    overlap.append((i, j))
+
+                        if len(overlap) == 0:
+                            continue  # No overlap, skip
+
+                        # Test global equality proof: ∀x in overlap, G[x] == G[x+Δ]
+                        is_equal = True
+                        first_counterexample = None
+
+                        for x in overlap:
+                            i, j = x
+                            i_shifted = i + di
+                            j_shifted = j + dj
+                            if G_test[i][j] != G_test[i_shifted][j_shifted]:
+                                is_equal = False
+                                first_counterexample = {
+                                    "x": [i, j],
+                                    "x_plus": [i_shifted, j_shifted],
+                                    "gx": int(G_test[i][j]),
+                                    "gxp": int(G_test[i_shifted][j_shifted])
+                                }
+                                break  # Found first counterexample
+
+                        # Check if this translate was admitted
+                        was_admitted = (di, dj) in admitted_translates
+
+                        rejection_entry = {
+                            "di": di,
+                            "dj": dj,
+                            "admitted": was_admitted,
+                            "global_proof_holds": is_equal,
+                            "overlap_size": len(overlap)
+                        }
+
+                        if not is_equal and first_counterexample:
+                            rejection_entry["first_counterexample"] = first_counterexample
+                        elif is_equal and not was_admitted:
+                            # BUG: proof holds but view not admitted
+                            rejection_entry["note"] = "BUG: global proof holds but view not admitted"
+
+                        sview_rejections.append(rejection_entry)
+
+                    witness_provenance["sview_rejections"] = sview_rejections
+
                 # Build diagnostic payload
                 pt_last_contradiction = {
                     "cid": cid,
@@ -847,7 +919,9 @@ def build_truth_partition(
             "witness": None,
             "tried": [],
             "conjugation_audit": [],  # WO-ND4: Empty by default
-            "witness_provenance": {}  # WO-ND5: Empty by default
+            "witness_provenance": {
+                "sview_rejections": []  # S-view rejection audit by default
+            }
         }
 
         if "|||DIAGNOSTIC:" in error_str:
