@@ -162,7 +162,7 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
 
     try:
         Q = truth.build_truth_partition(
-            Xtest_presented, sviews_list, components_list, frames, Yout_presented
+            Xtest_presented, sviews_list, components_list, sviews_meta, frames, Yout_presented
         )
     except AssertionError as e:
         doc = receipts.finalize()

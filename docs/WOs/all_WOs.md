@@ -50,6 +50,11 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Scope:** must-link via S-views; cannot-link splits using **fixed order**: input_color ≺ sview_image ≺ parity; conjugated reads only to *check* single-valuedness; no output-derived predicates.
 **Reviewer produces:** tests that random train order yields same classes; explicit failure if any class is multi-valued.
 **Done when:** receipts log split steps; I-4 single-valuedness passes.
+ 
+ ## WO-6ab ✅ COMPLETE
+ Combined WO-06a + WO-06b implements:
+  - Item 1 (Residue-k) ✓
+  - Item 2 (Components) ✓
 
 # WO-07 — Shape law + pullback ✅ COMPLETE
 
@@ -93,6 +98,9 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Reviewer produces:** audit that each descriptor addition is receipts-justified; final run logs 0 missing; submission file validated locally.
 **Done when:** training set equals official outputs; no `missing_descriptor`; submission driver ready.
 
+
+# WO-ND1 — Make components deterministic (and prove it in receipts)
+# WO-ND2 — Make truth Paige–Tarjan deterministic (and prove it)
 ---
 
 ## Why this sequence guarantees coverage by the last WO

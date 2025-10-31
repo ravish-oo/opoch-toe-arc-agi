@@ -212,31 +212,134 @@ def check_single_valued(
 # ============================================================================
 
 
+def build_pt_predicates(
+    G_test: IntGrid,
+    sviews: List,
+    components: List,
+    residue_meta: Dict[str, int]
+) -> Tuple[List[Tuple[str, str, List[Coord]]], Dict[str, int]]:
+    """
+    Build small, lawful PT predicate basis: components + residue + overlap.
+
+    Args:
+        G_test: Presented test input
+        sviews: S-views list (to extract overlap translations)
+        components: Components list
+        residue_meta: {"row_gcd": int, "col_gcd": int}
+
+    Returns:
+        (predicates, counts) where:
+            predicates: List of (kind, name, mask) tuples
+            counts: {"components": int, "residue_row": int, "residue_col": int, "overlap": int}
+    """
+    H = len(G_test)
+    W = len(G_test[0]) if H > 0 else 0
+
+    preds = []
+    counts = {"components": 0, "residue_row": 0, "residue_col": 0, "overlap": 0}
+
+    # A) Component masks - one predicate per component
+    for c in components:
+        preds.append(("component", f"{c.color}:{c.comp_id}", c.mask))
+        counts["components"] += 1
+
+    # B) Residue masks - gcd row/col classes if gcd > 1
+    p_row = int(residue_meta.get("row_gcd", 1))
+    if p_row > 1:
+        masks = [[] for _ in range(p_row)]
+        for i in range(H):
+            for j in range(W):
+                masks[j % p_row].append((i, j))
+        for r, m in enumerate(masks):
+            preds.append(("residue_row", f"p={p_row},r={r}", m))
+            counts["residue_row"] += 1
+
+    p_col = int(residue_meta.get("col_gcd", 1))
+    if p_col > 1:
+        masks = [[] for _ in range(p_col)]
+        for i in range(H):
+            for j in range(W):
+                masks[i % p_col].append((i, j))
+        for r, m in enumerate(masks):
+            preds.append(("residue_col", f"p={p_col},r={r}", m))
+            counts["residue_col"] += 1
+
+    # C) Overlap translation images - from admitted translate S-views
+    # Select top K=16 by domain size, then lexicographic
+    overlap_candidates = []
+    for view in sviews:
+        if hasattr(view, 'kind') and view.kind == 'translate':
+            # Extract translation delta from params
+            params = view.params if hasattr(view, 'params') else {}
+            di = params.get('di', 0)
+            dj = params.get('dj', 0)
+
+            # Fix 1: Filter identity translation (di=0, dj=0)
+            if di == 0 and dj == 0:
+                continue
+
+            # Fix 2: Compute domain size by formula (not attribute)
+            # |Ω_Δ| = max(0, H - |di|) × max(0, W - |dj|)
+            dom_size = max(0, H - abs(di)) * max(0, W - abs(dj))
+
+            if dom_size == 0:
+                continue
+
+            # Compute image/overlap mask (domain of translation)
+            # Ω_Δ = {(i,j) | (i,j) and (i+di, j+dj) both in-bounds}
+            mask = []
+            for i in range(H):
+                for j in range(W):
+                    x = (i, j)
+                    y = (i + di, j + dj)
+                    # x is in overlap if both x and y are in bounds
+                    if 0 <= y[0] < H and 0 <= y[1] < W:
+                        mask.append(x)
+
+            # Sanity check: mask size must equal computed domain size
+            assert len(mask) == dom_size, f"overlap mask size mismatch di={di},dj={dj}: expected {dom_size}, got {len(mask)}"
+
+            # Rank by: domain_size desc, then (|di|+|dj|, di, dj) asc
+            rank_key = (-dom_size, abs(di) + abs(dj), di, dj)
+            overlap_candidates.append((rank_key, di, dj, mask))
+
+    # Sort and take top 16
+    overlap_candidates.sort(key=lambda x: x[0])
+    for _, di, dj, mask in overlap_candidates[:16]:
+        preds.append(("overlap", f"di={di:+d},dj={dj:+d}", mask))
+        counts["overlap"] += 1
+
+    return (preds, counts)
+
+
 def paige_tarjan_refine(
     G_test: IntGrid,
     initial_cid_of: List[int],
     sviews: List,
     components: List,
+    residue_meta: Dict[str, int],
     frames: Dict[str, Any],
     train_outputs_presented: List[IntGrid]
-) -> Tuple[List[int], List[Dict]]:
+) -> Tuple[List[int], List[Dict], Dict[str, int]]:
     """
     Refine partition via Paige-Tarjan with fixed predicate order.
 
-    Predicate order: input_color ≺ sview_image ≺ parity
+    Predicate order: input_color ≺ sview_image (component/residue/overlap) ≺ parity
 
     Args:
         G_test: Presented test input
         initial_cid_of: Class id per pixel after must-link (row-major)
         sviews: S-views list
         components: Components list
+        residue_meta: {"row_gcd": int, "col_gcd": int}
         frames: Frames dict
         train_outputs_presented: Posed training outputs
 
     Returns:
-        (final_cid_of, splits) where:
+        (final_cid_of, splits, pt_predicate_counts) where:
             final_cid_of: Updated class id array
             splits: List of split records for receipt
+            pt_predicate_counts: Dict with predicate basis sizes
     """
     H = len(G_test)
     W = len(G_test[0]) if H > 0 else 0
@@ -249,7 +352,14 @@ def paige_tarjan_refine(
     next_cid = max(cid_of) + 1 if cid_of else 0  # Monotonic allocator
 
     # Build predicates (input-only, deterministic order)
+    # Get mask-based predicates from PT basis
+    mask_predicates, pt_predicate_counts = build_pt_predicates(
+        G_test, sviews, components, residue_meta
+    )
+
+    # Convert to function-based predicates for PT loop
     predicates = []
+    predicate_metadata = []  # For diagnostics
 
     # 1. input_color
     def make_input_color_pred():
@@ -258,42 +368,19 @@ def paige_tarjan_refine(
         return ("input_color", pred)
 
     predicates.append(make_input_color_pred())
+    predicate_metadata.append(("input_color", "input_color", None))
 
-    # 2. membership_in_Sview_image (S-views + components)
-    # S-view images
-    for view in sviews:
-        # Compute image set
-        image_set = set()
-        for i in range(H):
-            for j in range(W):
-                x = (i, j)
-                if hasattr(view, 'apply'):
-                    y = view.apply(x)
-                elif 'apply' in view:
-                    y = view['apply'](x)
-                else:
-                    continue
-                if y is not None:
-                    image_set.add(y)
+    # 2. membership_in_Sview_image (components + residue + overlap)
+    for kind, name, mask in mask_predicates:
+        mask_set = set(mask)
 
-        if image_set:
-            def make_membership_pred(img_set):
-                def pred(x):
-                    return 1 if x in img_set else 0
-                return pred
-
-            predicates.append(("sview_image", make_membership_pred(image_set)))
-
-    # Component masks
-    for comp in components:
-        mask_set = set(comp.mask)
-
-        def make_comp_pred(mset):
+        def make_membership_pred(mset):
             def pred(x):
                 return 1 if x in mset else 0
             return pred
 
-        predicates.append(("sview_image", make_comp_pred(mask_set)))
+        predicates.append(("sview_image", make_membership_pred(mask_set)))
+        predicate_metadata.append(("sview_image", f"{kind}:{name}", mask_set))
 
     # 3. parity
     def make_parity_pred():
@@ -302,6 +389,7 @@ def paige_tarjan_refine(
         return ("parity", pred)
 
     predicates.append(make_parity_pred())
+    predicate_metadata.append(("parity", "parity", None))
 
     splits = []
     changed = True
@@ -371,16 +459,28 @@ def paige_tarjan_refine(
 
             # Try to split by first applicable predicate
             split_done = False
+            tried_predicates = []  # For diagnostics
 
-            for pred_name, pred_fn in predicates:
+            for pred_idx, (pred_name, pred_fn) in enumerate(predicates):
                 # Evaluate predicate on all coords in class
                 pred_values = defaultdict(list)
                 for x in coords:
                     val = pred_fn(x)
                     pred_values[val].append(x)
 
+                # Record attempt for diagnostics
+                _, pred_full_name, pred_mask = predicate_metadata[pred_idx]
+                parts_count = len(pred_values)
+                class_hits = len(coords) if pred_mask is None else sum(1 for x in coords if x in pred_mask)
+
+                tried_predicates.append({
+                    "pred": pred_full_name,
+                    "parts": parts_count,
+                    "class_hits": class_hits
+                })
+
                 # Check if predicate splits into ≥2 parts
-                if len(pred_values) < 2:
+                if parts_count < 2:
                     continue
 
                 # Split: reassign cid_of for each part
@@ -422,14 +522,24 @@ def paige_tarjan_refine(
 
             if not split_done:
                 # No predicate could split this contradictory class
+                # Build diagnostic payload
+                pt_last_contradiction = {
+                    "cid": cid,
+                    "colors_seen": sorted(all_colors),
+                    "witness": list(witness_coord_out) if witness_coord_out else None,
+                    "tried": tried_predicates
+                }
+
+                # Store in a way that build_truth_partition can access
                 raise AssertionError(
                     f"PT failed: class {cid} has contradiction but no predicate splits it. "
-                    f"colors_seen={sorted(all_colors)}, witness={witness_coord_out}"
+                    f"colors_seen={sorted(all_colors)}, witness={witness_coord_out}|||"
+                    f"DIAGNOSTIC:{pt_last_contradiction}"
                 )
 
         # End of class scan; if changed, repeat
 
-    return (cid_of, splits)
+    return (cid_of, splits, pt_predicate_counts)
 
 
 # ============================================================================
@@ -441,6 +551,7 @@ def build_truth_partition(
     G_test_presented: IntGrid,
     sviews: List,
     components: List,
+    residue_meta: Dict[str, int],
     frames: Dict[str, Any],
     train_outputs_presented: List[IntGrid]
 ) -> Partition:
@@ -451,6 +562,7 @@ def build_truth_partition(
         G_test_presented: Presented test input
         sviews: S-views from build_sviews (WO-03/04)
         components: Components from build_components (WO-05)
+        residue_meta: {"row_gcd": int, "col_gcd": int} for PT predicates
         frames: Dict with P_test, P_out list
         train_outputs_presented: List of posed training outputs
 
@@ -512,18 +624,49 @@ def build_truth_partition(
     # Phase 3: Freeze UF and extract initial partition
     cid_of_after_mustlink = uf.get_classes()
 
+    # Compute PT predicate counts before calling PT (for error receipts)
+    _, pt_pred_counts_preview = build_pt_predicates(
+        G_test_presented, sviews, components, residue_meta
+    )
+
     # Phase 4: Paige-Tarjan refinement (operates on partition array)
     try:
-        cid_of, splits = paige_tarjan_refine(
+        cid_of, splits, pt_predicate_counts = paige_tarjan_refine(
             G_test_presented,
             cid_of_after_mustlink,
             sviews,
             components,
+            residue_meta,
             frames,
             train_outputs_presented
         )
     except AssertionError as e:
-        # Log partial receipt before re-raising PT error
+        # Parse diagnostic if present
+        error_str = str(e)
+
+        # Fix 3: Initialize pt_last_contradiction with default (always present)
+        pt_last_contradiction = {
+            "cid": -1,
+            "colors_seen": [],
+            "witness": None,
+            "tried": []
+        }
+
+        if "|||DIAGNOSTIC:" in error_str:
+            parts = error_str.split("|||DIAGNOSTIC:")
+            error_msg = parts[0]
+            try:
+                import ast
+                parsed = ast.literal_eval(parts[1])
+                # Override default with parsed diagnostic
+                pt_last_contradiction = parsed
+            except Exception as parse_err:
+                # Log parsing failure but keep default diagnostic
+                error_msg = f"{parts[0]} [diagnostic parse failed: {parse_err}]"
+        else:
+            error_msg = error_str
+
+        # Fix 3: Always log receipt with pt_predicate_counts and pt_last_contradiction
         receipt = {
             "splits": [],
             "final_classes": 0,
@@ -532,13 +675,16 @@ def build_truth_partition(
                 "sviews": sview_edges,
                 "components": comp_edges
             },
+            "pt_predicate_counts": pt_pred_counts_preview,
+            "pt_last_contradiction": pt_last_contradiction,
             "examples": {
                 "case": "PT_failed",
-                "detail": str(e)
+                "detail": error_msg
             }
         }
+
         receipts.log("truth", receipt)
-        raise
+        raise AssertionError(error_msg)
 
     # Finalize partition
     part = Partition(H, W, cid_of)
@@ -555,6 +701,7 @@ def build_truth_partition(
             "sviews": sview_edges,
             "components": comp_edges
         },
+        "pt_predicate_counts": pt_predicate_counts,
         "examples": {}
     }
 
