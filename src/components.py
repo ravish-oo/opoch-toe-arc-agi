@@ -450,7 +450,7 @@ def _self_check_components() -> Dict:
 
 def init() -> None:
     """
-    Run self-check and emit components receipt.
+    Run self-check (no receipt logging - caller logs after build_components).
 
     Raises:
         AssertionError: If any identity check fails
@@ -459,25 +459,17 @@ def init() -> None:
         - Called by harness, not on import
         - Assumes receipts.init() has been called
         - Runs self-check only if ARC_SELF_CHECK=1
+        - Receipt logging moved to caller after build_components()
     """
     # Check if self-check should run
     if os.environ.get("ARC_SELF_CHECK") != "1":
         # Skip self-check in normal mode (fast path)
-        receipts.log("components", {
-            "count_total": 0,
-            "by_color": {},
-            "largest": {},
-            "anchors_first5": [],
-            "proof_reconstruct_ok": False,
-            "examples": {},
-            "note": "self-check skipped (ARC_SELF_CHECK != 1)"
-        })
         return
 
     receipt = _self_check_components()
 
-    # Emit receipt
-    receipts.log("components", receipt)
+    # Emit receipt only for self-check
+    receipts.log("components_selfcheck", receipt)
 
     # Assert all checks passed
     if not receipt["proof_reconstruct_ok"]:

@@ -944,7 +944,7 @@ def _self_check_sviews() -> Dict:
 
 def init() -> None:
     """
-    Run self-check and emit sviews receipt.
+    Run self-check (no receipt logging - caller logs after build_sviews).
 
     Raises:
         AssertionError: If any identity check fails
@@ -953,26 +953,17 @@ def init() -> None:
         - Called by harness, not on import
         - Assumes receipts.init() has been called
         - Runs self-check only if ARC_SELF_CHECK=1
+        - Receipt logging moved to caller after build_sviews()
     """
     # Check if self-check should run
     if os.environ.get("ARC_SELF_CHECK") != "1":
         # Skip self-check in normal mode (fast path)
-        # Emit minimal receipt
-        receipts.log("sviews", {
-            "count": 0,
-            "depth_max": 0,
-            "views": [],
-            "proof_samples": [],
-            "closure_capped": False,
-            "examples": {},
-            "note": "self-check skipped (ARC_SELF_CHECK != 1)"
-        })
         return
 
     receipt = _self_check_sviews()
 
-    # Emit receipt
-    receipts.log("sviews", receipt)
+    # Emit receipt only for self-check
+    receipts.log("sviews_selfcheck", receipt)
 
     # Assert all checks passed
     if "d4_domain" in receipt.get("examples", {}):

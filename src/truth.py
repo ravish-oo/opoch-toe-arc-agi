@@ -513,14 +513,32 @@ def build_truth_partition(
     cid_of_after_mustlink = uf.get_classes()
 
     # Phase 4: Paige-Tarjan refinement (operates on partition array)
-    cid_of, splits = paige_tarjan_refine(
-        G_test_presented,
-        cid_of_after_mustlink,
-        sviews,
-        components,
-        frames,
-        train_outputs_presented
-    )
+    try:
+        cid_of, splits = paige_tarjan_refine(
+            G_test_presented,
+            cid_of_after_mustlink,
+            sviews,
+            components,
+            frames,
+            train_outputs_presented
+        )
+    except AssertionError as e:
+        # Log partial receipt before re-raising PT error
+        receipt = {
+            "splits": [],
+            "final_classes": 0,
+            "single_valued_ok": False,
+            "mustlink_sources": {
+                "sviews": sview_edges,
+                "components": comp_edges
+            },
+            "examples": {
+                "case": "PT_failed",
+                "detail": str(e)
+            }
+        }
+        receipts.log("truth", receipt)
+        raise
 
     # Finalize partition
     part = Partition(H, W, cid_of)
@@ -755,7 +773,7 @@ def _self_check_truth() -> Dict:
 
 def init() -> None:
     """
-    Run self-check and emit truth receipt.
+    Run self-check (no receipt logging - caller logs after build_truth_partition).
 
     Raises:
         AssertionError: If any identity check fails
@@ -764,24 +782,17 @@ def init() -> None:
         - Called by harness, not on import
         - Assumes receipts.init() has been called
         - Runs self-check only if ARC_SELF_CHECK=1
+        - Receipt logging moved to caller after build_truth_partition()
     """
     # Check if self-check should run
     if os.environ.get("ARC_SELF_CHECK") != "1":
         # Skip self-check in normal mode (fast path)
-        receipts.log("truth", {
-            "splits": [],
-            "final_classes": 0,
-            "single_valued_ok": False,
-            "mustlink_sources": {"sviews": 0, "components": 0},
-            "examples": {},
-            "note": "self-check skipped (ARC_SELF_CHECK != 1)"
-        })
         return
 
     receipt = _self_check_truth()
 
-    # Emit receipt
-    receipts.log("truth", receipt)
+    # Emit receipt only for self-check
+    receipts.log("truth_selfcheck", receipt)
 
     # Assert all checks passed
     if not receipt["single_valued_ok"]:

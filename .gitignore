@@ -215,3 +215,4 @@ receipts_test/
 receipts/*
 !receipts/.gitkeep
 test_results.json
+receipts_*
