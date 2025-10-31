@@ -349,11 +349,16 @@ def run_task_once(
     )
 
     if sieve_result["status"] == "missing_descriptor":
+        # Log selection section so sweep can categorize as truth_pass_missing_law
+        receipts.log("selection", sieve_result)
         # Return missing status (no predictions)
         doc = receipts.finalize()
         return (None, doc, receipts.hash_receipts(doc))
 
     # 8. Paint test output
+    # Log selection section for receipts completeness
+    receipts.log("selection", sieve_result)
+
     paint.init()
     assignment = sieve_result["assignment"]
 
