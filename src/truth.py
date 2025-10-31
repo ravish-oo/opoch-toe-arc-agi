@@ -161,12 +161,13 @@ def check_single_valued(
     Verify every class has ≤1 output color across all trainings.
 
     WO-ND2 fix: Accept outputs paired with original train indices.
+    Frame indexing fix: Use dict-keyed frames.
 
     Uses TEST→OUT conjugation; skips OOB mappings.
 
     Args:
         part: Final partition
-        frames: Dict with P_test and P_out list
+        frames: Dict with P_test and P_out dict (keyed by orig_i)
         train_outputs_with_ids: List of (orig_train_idx, posed_output) tuples
 
     Returns:
@@ -174,7 +175,7 @@ def check_single_valued(
         for first contradiction, else None
     """
     P_test = frames["P_test"]
-    P_out_list = frames["P_out"]
+    P_out_by_id = frames["P_out"]
 
     classes_list = part.classes()
 
@@ -183,7 +184,7 @@ def check_single_valued(
 
         # WO-ND2: Iterate by sorted original train indices
         for orig_train_idx, Y_i in sorted(train_outputs_with_ids, key=lambda t: t[0]):
-            P_out = P_out_list[orig_train_idx]
+            P_out = P_out_by_id[orig_train_idx]
             H_out = len(Y_i)
             W_out = len(Y_i[0]) if H_out > 0 else 0
 
@@ -350,7 +351,7 @@ def paige_tarjan_refine(
     W = len(G_test[0]) if H > 0 else 0
 
     P_test = frames["P_test"]
-    P_out_list = frames["P_out"]
+    P_out_by_id = frames["P_out"]
 
     # Initialize partition state (freeze UF, operate on arrays)
     cid_of = list(initial_cid_of)  # Copy so we can mutate
@@ -420,7 +421,7 @@ def paige_tarjan_refine(
             witness = None
 
             for orig_train_idx, Y_i in sorted(train_outputs_with_ids, key=lambda t: t[0]):
-                P_out = P_out_list[orig_train_idx]
+                P_out = P_out_by_id[orig_train_idx]
                 H_out = len(Y_i)
                 W_out = len(Y_i[0]) if H_out > 0 else 0
 

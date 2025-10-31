@@ -78,23 +78,24 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
     receipts.log("present_palette_canon", palette_canon)
 
     # Present all training inputs
+    # Frame indexing fix: Build dicts keyed by original index
     Xin_presented = []
-    P_in_list = []
-    for grid in Xin_raw:
+    P_in_by_id = {}
+    for orig_idx, grid in enumerate(Xin_raw):
         presented, frame = present.present_input(grid, Π)
         Xin_presented.append(presented)
-        P_in_list.append(frame)
+        P_in_by_id[orig_idx] = frame
 
     # Present all training outputs
     # WO-ND2 fix: Pair outputs with original train indices
     Yout_presented = []
     Yout_with_ids = []
-    P_out_list = []
+    P_out_by_id = {}
     for orig_idx, grid in enumerate(Yout_raw):
         presented, frame = present.present_output(grid, Π)
         Yout_presented.append(presented)
         Yout_with_ids.append((orig_idx, presented))
-        P_out_list.append(frame)
+        P_out_by_id[orig_idx] = frame
 
     # Present test input
     Xtest_presented, P_test = present.present_input(Xtest_raw, Π)
@@ -185,10 +186,11 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
     # 4. Build truth partition
     truth.init()
 
-    # Prepare frames dict
+    # Prepare frames dict (keyed by original indices)
     frames = {
         "P_test": P_test,
-        "P_out": P_out_list
+        "P_out": P_out_by_id,
+        "P_in": P_in_by_id
     }
 
     try:
@@ -245,6 +247,11 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
     # Admit KEEP laws per class
     keep_admitted = {}
     all_cids = set(Q.cid_of)
+
+    # Convert frame dicts to sorted lists for legacy API
+    P_in_list = [P_in_by_id[i] for i in sorted(P_in_by_id.keys())]
+    P_out_list = [P_out_by_id[i] for i in sorted(P_out_by_id.keys())]
+
     for cid in all_cids:
         pixels = class_pixels_test.get(cid, [])
         if not pixels:
@@ -307,15 +314,17 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
     # 7. Build class_map and run sieve
     sieve.init()
 
-    # Build class maps for all training pairs
+    # Build class maps for all training pairs (iterate by sorted orig_i)
     class_maps = []
-    for i in range(len(Yout_presented)):
-        H_out = len(Yout_presented[i])
-        W_out = len(Yout_presented[i][0]) if H_out > 0 else 0
-        cm = class_map.build_class_map_i(H_out, W_out, P_test, P_out_list[i], Q)
+    for orig_i in sorted(P_out_by_id.keys()):
+        # Find the presented output for this orig_i
+        Y_i = next(Y for oid, Y in Yout_with_ids if oid == orig_i)
+        H_out = len(Y_i)
+        W_out = len(Y_i[0]) if H_out > 0 else 0
+        cm = class_map.build_class_map_i(H_out, W_out, P_test, P_out_by_id[orig_i], Q)
         class_maps.append(cm)
 
-    # Run sieve
+    # Run sieve (uses sorted lists for sequential iteration)
     sieve_result = sieve.run_sieve(
         Q, class_maps, Xin_presented, Yout_presented,
         P_test, P_in_list, P_out_list,
