@@ -209,6 +209,10 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
     # 5. Learn shape law
     shape_law.init()
 
+    # Convert frame dicts to sorted lists for legacy API
+    P_in_list = [P_in_by_id[i] for i in sorted(P_in_by_id.keys())]
+    P_out_list = [P_out_by_id[i] for i in sorted(P_out_by_id.keys())]
+
     # Build size list: (Hin, Win, Hout, Wout) from presented frames
     sizes = []
     for i in range(len(train_pairs)):
@@ -247,10 +251,6 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
     # Admit KEEP laws per class
     keep_admitted = {}
     all_cids = set(Q.cid_of)
-
-    # Convert frame dicts to sorted lists for legacy API
-    P_in_list = [P_in_by_id[i] for i in sorted(P_in_by_id.keys())]
-    P_out_list = [P_out_by_id[i] for i in sorted(P_out_by_id.keys())]
 
     for cid in all_cids:
         pixels = class_pixels_test.get(cid, [])
