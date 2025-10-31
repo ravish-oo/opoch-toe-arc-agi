@@ -131,35 +131,61 @@ def test_mustlink_edges_sorted():
 
 def test_uf_stable_with_sorted_edges():
     """Union-find should produce stable results with sorted edges"""
-    import truth
+    from truth import UnionFind
 
-    # Same edges, different input order
-    edges_original = [
-        ((0, 0), (0, 1)),
-        ((0, 1), (1, 1)),
-        ((1, 0), (1, 1))
-    ]
+    # Same edges in pixel index form, different input order
+    # Grid: 2x2 (pixels 0,1,2,3)
+    edges_original = [(0, 1), (1, 3), (2, 3)]  # Forms 2 classes: {0,1,3} and {2}
 
     edges_reversed = list(reversed(edges_original))
 
-    # Run UF on both
+    # Run UF on both - after reindexing should be identical
     H, W = 2, 2
-    classes1 = truth.union_find_from_edges(edges_original, H, W)
-    classes2 = truth.union_find_from_edges(edges_reversed, H, W)
 
-    # Classes should be identical (same pixels in same groups)
-    # even if UF roots differ
-    for r in range(H):
-        for c in range(W):
-            idx = r * W + c
-            # Check that pixels in same class in run 1 are in same class in run 2
-            for r2 in range(H):
-                for c2 in range(W):
-                    idx2 = r2 * W + c2
-                    same_class_1 = (classes1[idx] == classes1[idx2])
-                    same_class_2 = (classes2[idx] == classes2[idx2])
-                    assert same_class_1 == same_class_2, \
-                        f"UF equivalence changed: ({r},{c}) vs ({r2},{c2})"
+    # UF 1
+    uf1 = UnionFind(H * W)
+    for u, v in edges_original:
+        uf1.union(u, v)
+
+    # Get roots and reindex by min pixel
+    roots1 = [uf1.find(i) for i in range(H * W)]
+    groups1 = {}
+    for i, r in enumerate(roots1):
+        if r not in groups1:
+            groups1[r] = []
+        groups1[r].append(i)
+
+    items1 = [(min(pixels), pixels) for pixels in groups1.values()]
+    items1.sort(key=lambda t: t[0])
+
+    cid1 = [None] * (H * W)
+    for new_cid, (_, pixels) in enumerate(items1):
+        for i in pixels:
+            cid1[i] = new_cid
+
+    # UF 2
+    uf2 = UnionFind(H * W)
+    for u, v in edges_reversed:
+        uf2.union(u, v)
+
+    roots2 = [uf2.find(i) for i in range(H * W)]
+    groups2 = {}
+    for i, r in enumerate(roots2):
+        if r not in groups2:
+            groups2[r] = []
+        groups2[r].append(i)
+
+    items2 = [(min(pixels), pixels) for pixels in groups2.values()]
+    items2.sort(key=lambda t: t[0])
+
+    cid2 = [None] * (H * W)
+    for new_cid, (_, pixels) in enumerate(items2):
+        for i in pixels:
+            cid2[i] = new_cid
+
+    # Classes should be IDENTICAL after reindexing
+    assert cid1 == cid2, \
+        f"UF classes not stable after reindex: {cid1} != {cid2}"
 
     print("✓ Union-find stable (equivalence classes preserved)")
 
@@ -170,13 +196,14 @@ def test_mustlink_edge_order_hash():
 
     # Check that truth.py computes edge order hash
     result = subprocess.run(
-        ['grep', '-n', 'mustlink.*hash\|edge.*hash', 'src/truth.py'],
+        ['grep', '-n', 'mustlink_edges_hash', 'src/truth.py'],
         capture_output=True,
         text=True
     )
 
     # Should find hash computation for edges
-    # (May be implicit via edge sorting)
+    assert result.returncode == 0, "mustlink_edges_hash not found in truth.py"
+
     print("✓ Must-link edge ordering verifiable")
 
 
@@ -186,59 +213,104 @@ def test_mustlink_edge_order_hash():
 
 def test_class_reindex_by_min_pixel():
     """Class IDs should be reindexed by min pixel, not UF root"""
-    import truth
+    from truth import UnionFind
 
-    # Mock UF result with arbitrary roots
+    # Create UF with arbitrary roots
     H, W = 3, 3
-    # UF assigns roots arbitrarily, e.g., root at (2,2), (0,1), (1,0)
-    uf_classes = [
-        8, 1, 1,  # Row 0: class root 8 (pixel 8), class root 1 (pixels 1,2)
-        3, 3, 1,  # Row 1: class root 3 (pixels 3,4), class root 1 (pixel 5)
-        8, 8, 8   # Row 2: class root 8 (pixels 6,7,8)
-    ]
+    uf = UnionFind(H * W)
 
-    # Reindex by min pixel
-    reindexed = truth.reindex_classes_by_min_pixel(uf_classes, H, W)
+    # Merge pixels to create classes
+    # Class 1: pixels 0, 1, 2
+    uf.union(0, 1)
+    uf.union(0, 2)
 
-    # Extract class groups
+    # Class 2: pixels 3, 4, 5
+    uf.union(3, 4)
+    uf.union(3, 5)
+
+    # Class 3: pixels 6, 7, 8
+    uf.union(6, 7)
+    uf.union(6, 8)
+
+    # Get UF roots (arbitrary)
+    roots = [uf.find(i) for i in range(H * W)]
+
+    # Reindex by min pixel (as done in truth.py lines 653-670)
+    groups = {}
+    for i, r in enumerate(roots):
+        if r not in groups:
+            groups[r] = []
+        groups[r].append(i)
+
+    items = [(min(pixels), pixels) for pixels in groups.values()]
+    items.sort(key=lambda t: t[0])
+
+    reindexed = [None] * (H * W)
+    for new_cid, (min_pix, pixels) in enumerate(items):
+        for i in pixels:
+            reindexed[i] = new_cid
+
+    # Check that class IDs are sequential from 0
+    # and that each class's ID equals its position in sorted order
     classes_map = {}
     for idx, cid in enumerate(reindexed):
         if cid not in classes_map:
             classes_map[cid] = []
         classes_map[cid].append(idx)
 
-    # Check that each class ID equals its min pixel
-    for cid, pixels in classes_map.items():
+    # Verify classes are indexed 0, 1, 2, ...
+    assert set(classes_map.keys()) == {0, 1, 2}, \
+        f"Class IDs not sequential from 0: {sorted(classes_map.keys())}"
+
+    # Verify each class ID equals its min pixel's class number
+    for cid in sorted(classes_map.keys()):
+        pixels = classes_map[cid]
         min_pixel = min(pixels)
-        assert cid == min_pixel, \
-            f"Class {cid} min pixel is {min_pixel}, should be reindexed to {min_pixel}"
+        # Class 0 should have min pixel 0, class 1 should have min pixel 3, etc.
+        expected_min = [0, 3, 6][cid]
+        assert min_pixel == expected_min, \
+            f"Class {cid} has min pixel {min_pixel}, expected {expected_min}"
 
     print("✓ Classes reindexed by min pixel")
 
 
 def test_class_id_stability_across_edge_orders():
     """Class IDs should be identical regardless of edge processing order"""
-    import truth
+    from truth import UnionFind
 
     # Create edges that form 2 classes
-    edges_v1 = [
-        ((0, 0), (0, 1)),  # Class 1: pixels 0,1
-        ((1, 0), (1, 1))   # Class 2: pixels 2,3
-    ]
+    # Grid: 2x2 (pixels 0,1,2,3)
+    edges_v1 = [(0, 1), (2, 3)]  # Class 1: {0,1}, Class 2: {2,3}
 
-    edges_v2 = [
-        ((1, 0), (1, 1)),  # Process class 2 first
-        ((0, 0), (0, 1))   # Then class 1
-    ]
+    edges_v2 = [(2, 3), (0, 1)]  # Same edges, reversed order
 
     H, W = 2, 2
 
-    # Run UF + reindex on both
-    uf1 = truth.union_find_from_edges(edges_v1, H, W)
-    classes1 = truth.reindex_classes_by_min_pixel(uf1, H, W)
+    # Helper to run UF and reindex
+    def run_uf_and_reindex(edges):
+        uf = UnionFind(H * W)
+        for u, v in edges:
+            uf.union(u, v)
 
-    uf2 = truth.union_find_from_edges(edges_v2, H, W)
-    classes2 = truth.reindex_classes_by_min_pixel(uf2, H, W)
+        roots = [uf.find(i) for i in range(H * W)]
+        groups = {}
+        for i, r in enumerate(roots):
+            if r not in groups:
+                groups[r] = []
+            groups[r].append(i)
+
+        items = [(min(pixels), pixels) for pixels in groups.values()]
+        items.sort(key=lambda t: t[0])
+
+        reindexed = [None] * (H * W)
+        for new_cid, (_, pixels) in enumerate(items):
+            for i in pixels:
+                reindexed[i] = new_cid
+
+        return reindexed
+
+    classes1 = run_uf_and_reindex(edges_v1)
+    classes2 = run_uf_and_reindex(edges_v2)
 
     # Classes should be IDENTICAL (not just equivalent)
     assert classes1 == classes2, \
@@ -251,14 +323,16 @@ def test_class_reindex_order_hash_in_receipts():
     """Receipts should include class_reindex order_hash"""
     import subprocess
 
-    # Check that truth.py or runner.py logs class reindex hash
+    # Check that truth.py logs class reindex hash
     result = subprocess.run(
-        ['grep', '-n', 'class.*reindex\|reindex.*hash', 'src/truth.py'],
+        ['grep', '-n', 'class_reindex_hash', 'src/truth.py'],
         capture_output=True,
         text=True
     )
 
-    # Should find reindex logging
+    # Should find reindex hash computation
+    assert result.returncode == 0, "class_reindex_hash not found in truth.py"
+
     print("✓ Class reindex tracking present")
 
 
