@@ -158,7 +158,10 @@ def check_single_valued(
     train_outputs_with_ids: List[Tuple[int, IntGrid]]
 ) -> Tuple[bool, Optional[Dict]]:
     """
-    Verify every class has ≤1 output color across all trainings.
+    Verify every class has ≤1 output color per training.
+
+    WO-Truth-PerTrain: Check ∀i, |{Y_i(x): x ∈ class}| ≤ 1 (per-training singleton)
+    NOT |⋃_i {Y_i(x): x ∈ class}| ≤ 1 (union across trainings)
 
     WO-ND2 fix: Accept outputs paired with original train indices.
     Frame indexing fix: Use dict-keyed frames.
@@ -171,8 +174,8 @@ def check_single_valued(
         train_outputs_with_ids: List of (orig_train_idx, posed_output) tuples
 
     Returns:
-        (ok, witness) where witness has {cid, train_idx, coord_out, colors_seen}
-        for first contradiction, else None
+        (ok, witness) where witness has {cid, train_idx, coord_out, colors_in_train}
+        for first per-training contradiction, else None
     """
     P_test = frames["P_test"]
     P_out_by_id = frames["P_out"]
@@ -180,13 +183,14 @@ def check_single_valued(
     classes_list = part.classes()
 
     for cid, coords in enumerate(classes_list):
-        colors_seen = set()
-
-        # WO-ND2: Iterate by sorted original train indices
+        # WO-Truth-PerTrain: Check each training individually
         for orig_train_idx, Y_i in sorted(train_outputs_with_ids, key=lambda t: t[0]):
             P_out = P_out_by_id[orig_train_idx]
             H_out = len(Y_i)
             W_out = len(Y_i[0]) if H_out > 0 else 0
+
+            colors_in_this_train = set()
+            witness_coord = None
 
             for x in coords:
                 coord_out = test_to_out(x, P_test, P_out)
@@ -196,17 +200,19 @@ def check_single_valued(
                 r, c = coord_out
                 # Check bounds
                 if 0 <= r < H_out and 0 <= c < W_out:
-                    colors_seen.add(Y_i[r][c])
+                    colors_in_this_train.add(Y_i[r][c])
+                    if witness_coord is None:
+                        witness_coord = coord_out
 
-        # Check single-valued
-        if len(colors_seen) > 1:
-            witness = {
-                "cid": cid,
-                "train_idx": -1,  # multiple trainings involved
-                "coord_out": None,
-                "colors_seen": sorted(colors_seen)
-            }
-            return (False, witness)
+            # Check single-valued IN THIS TRAINING
+            if len(colors_in_this_train) > 1:
+                witness = {
+                    "cid": cid,
+                    "train_idx": orig_train_idx,  # WO-Truth-PerTrain: Specific training
+                    "coord_out": list(witness_coord) if witness_coord else None,
+                    "colors_in_train": sorted(colors_in_this_train)  # WO-Truth-PerTrain: Per-training colors
+                }
+                return (False, witness)
 
     return (True, None)
 
@@ -499,32 +505,29 @@ def paige_tarjan_refine(
                 if colors_seen_list:
                     colors_by_train.append((orig_train_idx, colors_seen_list, witness_coord))
 
-            # Gather all colors seen (preserve first-seen order)
-            all_colors_list = []
-            all_colors_set = set()
-            for _, colors_list, _ in colors_by_train:
-                for c in colors_list:
-                    if c not in all_colors_set:
-                        all_colors_list.append(c)
-                        all_colors_set.add(c)
+            # WO-Truth-PerTrain: Check for per-training contradiction
+            # Spec (00-math-spec.md:74): ∀i, |{Y_i(x): x ∈ class}| = 1
+            # Reject ONLY if any single training has multiple colors for this class
+            # Do NOT reject based on union across trainings (that's for Law layer)
 
-            # If ≥2 colors, we have contradiction
-            if len(all_colors_list) < 2:
-                continue  # No contradiction, class is fine
-
-            # Find witness (first training with multiple colors or first conflict)
+            contradiction_found = False
             witness_train = -1
+            witness_colors_in_train = []
             witness_coord_out = None
+
             for train_idx, colors_list, coord in colors_by_train:
                 if len(colors_list) > 1:
+                    # THIS training has multiple colors for this class → true PT contradiction
+                    contradiction_found = True
                     witness_train = train_idx
+                    witness_colors_in_train = colors_list
                     witness_coord_out = coord
                     break
 
-            if witness_train == -1 and len(colors_by_train) >= 2:
-                # Different colors across trainings
-                witness_train = colors_by_train[0][0]
-                witness_coord_out = colors_by_train[0][2]
+            if not contradiction_found:
+                # All trainings have singleton (or empty) for this class
+                # Class is valid for Truth; cross-training differences handled by Law
+                continue
 
             # Try to split by first applicable predicate
             split_done = False
@@ -588,7 +591,7 @@ def paige_tarjan_refine(
                     "witness": {
                         "train_idx": witness_train,
                         "coord_out": list(witness_coord_out) if witness_coord_out else None,
-                        "colors_seen": all_colors_list  # WO-ND2: Use list instead of sorted set
+                        "colors_in_train": witness_colors_in_train  # WO-Truth-PerTrain: Per-training colors
                     }
                 })
 
@@ -810,9 +813,14 @@ def paige_tarjan_refine(
                     witness_provenance["sview_rejections"] = sview_rejections
 
                 # Build diagnostic payload
+                # WO-Truth-PerTrain: Include colors_by_train dict and train_idx
+                colors_by_train_dict = {str(train_idx): colors_list for train_idx, colors_list, _ in colors_by_train}
+
                 pt_last_contradiction = {
                     "cid": cid,
-                    "colors_seen": all_colors_list,  # WO-ND2: Use list (first-seen order)
+                    "train_idx": witness_train,  # WO-Truth-PerTrain: Which training forced split
+                    "colors_in_train": witness_colors_in_train,  # WO-Truth-PerTrain: Colors in that training
+                    "colors_by_train": colors_by_train_dict,  # WO-Truth-PerTrain: All trainings' colors
                     "witness": list(witness_coord_out) if witness_coord_out else None,
                     "tried": tried_predicates,
                     "conjugation_audit": conjugation_audit,  # WO-ND4: Full TEST→OUT trace
@@ -822,7 +830,7 @@ def paige_tarjan_refine(
                 # Store in a way that build_truth_partition can access
                 raise AssertionError(
                     f"PT failed: class {cid} has contradiction but no predicate splits it. "
-                    f"colors_seen={all_colors_list}, witness={witness_coord_out}|||"
+                    f"train_idx={witness_train}, colors_in_train={witness_colors_in_train}, witness={witness_coord_out}|||"
                     f"DIAGNOSTIC:{pt_last_contradiction}"
                 )
 
@@ -965,9 +973,12 @@ def build_truth_partition(
         error_str = str(e)
 
         # Fix 3: Initialize pt_last_contradiction with default (always present)
+        # WO-Truth-PerTrain: Use new receipt format
         pt_last_contradiction = {
             "cid": -1,
-            "colors_seen": [],
+            "train_idx": -1,
+            "colors_in_train": [],
+            "colors_by_train": {},
             "witness": None,
             "tried": [],
             "conjugation_audit": [],  # WO-ND4: Empty by default
