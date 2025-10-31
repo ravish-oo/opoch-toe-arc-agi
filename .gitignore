@@ -209,3 +209,9 @@ __marimo__/
 # Project data (do not version control large/raw datasets)
 data/
 reviews/
+receipts_test/
+
+# Receipts: keep the folder in repo, ignore its contents
+receipts/*
+!receipts/.gitkeep
+test_results.json

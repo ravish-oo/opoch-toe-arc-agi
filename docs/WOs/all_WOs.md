@@ -79,14 +79,14 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Reviewer produces:** test where identity vs tile are both locally plausible but sieve prunes identity; test that `missing_descriptor` fires with examples when catalog lacks a needed law.
 **Done when:** receipts “selection: exact” on microsuite, or “missing_descriptor” with examples on crafted gap.
 
-# WO-11 — Painter + un-present + end-to-end microsuite
+# WO-11 — Painter + un-present + end-to-end microsuite ✅ COMPLETE
 
 **Goal:** one-pass UE paint, idempotent.
 **Scope:** evaluate chosen laws on test; paint once; assert idempotence; un-present to raw; coverage and by-law counts in receipts.
 **Reviewer produces:** Tier-B microsuite (6 tasks) and Tier-C determinism; painter idempotence test.
 **Done when:** microsuite green; determinism hash stable; paint idempotence holds.
 
-# WO-12 — Hard-set run + descriptor closure + submission driver
+# WO-12 — Hard-set run + descriptor closure + submission driver ✅ COMPLETE
 
 **Goal:** reach 100% or get certified gaps, then close them.
 **Scope:** run full training corpus; collect any `missing_descriptor`; add the single minimal descriptor demanded (additive-only change); re-run until none left; write Kaggle `main.py` submission driver.
