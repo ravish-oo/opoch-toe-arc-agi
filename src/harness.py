@@ -27,7 +27,7 @@ def main():
     parser.add_argument(
         "--selfcheck",
         type=str,
-        choices=["morphisms", "present", "sviews", "components", "truth", "shape", "keep", "value", "sieve"],
+        choices=["morphisms", "present", "sviews", "components", "truth", "shape", "keep", "value", "sieve", "paint"],
         help="Module to self-check"
     )
     parser.add_argument(
@@ -124,6 +124,15 @@ def main():
         sieve.init()
         print(f"✓ morphisms self-check passed")
         print(f"✓ sieve self-check passed")
+    elif args.selfcheck == "paint":
+        import morphisms
+        import paint
+        morphisms.init()
+        # Set environment variable for self-check
+        os.environ["ARC_SELF_CHECK"] = "1"
+        paint.init()
+        print(f"✓ morphisms self-check passed")
+        print(f"✓ paint self-check passed")
 
     # Finalize and print
     doc = receipts.finalize()

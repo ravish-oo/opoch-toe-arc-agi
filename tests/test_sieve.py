@@ -500,6 +500,112 @@ def test_self_check_enabled():
 
 
 # ============================================================================
+# Bottom (⊥) Class Tests (Unseen Pixels)
+# ============================================================================
+
+def test_sieve_bottom_class_agreement():
+    """Sieve should create ⊥ class when unseen pixels all agree"""
+    # When shape creates unseen pixels (pullback None) and they all have same color
+    from truth import Partition
+
+    # Partition on 1x1 test input (all pixels in class 0)
+    part = Partition(H=1, W=1, cid_of=[0])
+
+    # Frames
+    P_test = (0, (0, 0), (1, 1))
+    P_in = [(0, (0, 0), (1, 1))]
+    P_out = [(0, (0, 0), (2, 2))]  # Output is 2x2, input is 1x1
+
+    # Input/Output
+    Xin = [[[1]]]
+    Yout = [[[5, 5], [5, 5]]]  # All pixels same color
+
+    # Build class_map - most pixels will be None (unseen)
+    from class_map import build_class_map_i
+    class_maps = [build_class_map_i(2, 2, P_test, P_out[0], part)]
+
+    # Only (0,0) maps back to (0,0) in class 0; others are unseen
+
+    keep_admitted = {}
+    value_admitted = {0: [{"type": "CONST", "c": 5}]}
+
+    result = sieve.run_sieve(
+        part, class_maps, Xin, Yout, P_test, P_in, P_out,
+        keep_admitted, value_admitted
+    )
+
+    # Should be exact with ⊥ class for unseen pixels
+    assert result["status"] == "exact"
+    assert "⊥" in result["assignment"]
+    assert "CONST(c=5)" in result["assignment"]["⊥"]
+
+
+def test_sieve_bottom_class_disagreement():
+    """Sieve should return missing_descriptor when unseen pixels disagree"""
+    from truth import Partition
+
+    # Partition on 1x1 test input
+    part = Partition(H=1, W=1, cid_of=[0])
+
+    # Frames
+    P_test = (0, (0, 0), (1, 1))
+    P_in = [(0, (0, 0), (1, 1))]
+    P_out = [(0, (0, 0), (2, 2))]  # Output 2x2, input 1x1
+
+    # Input/Output - unseen pixels have DIFFERENT colors
+    Xin = [[[1]]]
+    Yout = [[[5, 6], [7, 8]]]  # Unseen pixels have different colors
+
+    # Build class_map
+    from class_map import build_class_map_i
+    class_maps = [build_class_map_i(2, 2, P_test, P_out[0], part)]
+
+    keep_admitted = {}
+    value_admitted = {0: [{"type": "CONST", "c": 5}]}
+
+    result = sieve.run_sieve(
+        part, class_maps, Xin, Yout, P_test, P_in, P_out,
+        keep_admitted, value_admitted
+    )
+
+    # Should return missing_descriptor because unseen pixels disagree
+    assert result["status"] == "missing_descriptor"
+    assert "missing" in result
+    # Check that ⊥ is in the missing list
+    missing_cids = [m["cid"] for m in result["missing"]]
+    assert "⊥" in missing_cids
+
+
+def test_sieve_descriptor_format_keep_prefix():
+    """Sieve should output KEEP: prefix for KEEP laws"""
+    from truth import Partition
+
+    part = Partition(H=2, W=2, cid_of=[0, 0, 0, 0])
+
+    P_test = (0, (0, 0), (2, 2))
+    P_in = [(0, (0, 0), (2, 2))]
+    P_out = [(0, (0, 0), (2, 2))]
+
+    Xin = [[[1, 2], [3, 4]]]
+    Yout = [[[1, 2], [3, 4]]]
+
+    from class_map import build_class_map_i
+    class_maps = [build_class_map_i(2, 2, P_test, P_out[0], part)]
+
+    keep_admitted = {0: [{"view": "identity"}]}
+    value_admitted = {}
+
+    result = sieve.run_sieve(
+        part, class_maps, Xin, Yout, P_test, P_in, P_out,
+        keep_admitted, value_admitted
+    )
+
+    assert result["status"] == "exact"
+    # Descriptor should have KEEP: prefix
+    assert result["assignment"]["0"].startswith("KEEP:")
+
+
+# ============================================================================
 # Test Intent Summary (for reviewer)
 # ============================================================================
 

@@ -36,8 +36,13 @@ COST_ORDER = [
 
 def _cost_of_descriptor(desc: str) -> int:
     """Return cost index of descriptor for sorting."""
+    # Strip "KEEP:" prefix if present for KEEP laws
+    check_desc = desc
+    if desc.startswith("KEEP:"):
+        check_desc = desc[5:]  # Remove "KEEP:" prefix
+
     for idx, pattern in enumerate(COST_ORDER):
-        if desc.startswith(pattern):
+        if check_desc.startswith(pattern):
             return idx
     # Default (unknown) goes last
     return len(COST_ORDER)
@@ -50,8 +55,16 @@ def _parse_descriptor(desc_obj: Dict[str, Any]) -> Tuple[str, str, Any]:
     Returns: (family, descriptor_str, params)
     """
     if "view" in desc_obj:
-        # KEEP
-        return ("KEEP", desc_obj["view"], desc_obj)
+        # KEEP - output canonical "KEEP:view" format
+        view_name = desc_obj["view"]
+        # Extract params (everything except "view" and "type")
+        params = {k: v for k, v in desc_obj.items() if k not in ["view", "type"]}
+        if params:
+            param_str = ",".join(f"{k}={v}" for k, v in sorted(params.items()))
+            desc_str = f"KEEP:{view_name}({param_str})"
+        else:
+            desc_str = f"KEEP:{view_name}"
+        return ("KEEP", desc_str, desc_obj)
     elif "c" in desc_obj:
         # CONST, UNIQUE, ARGMAX, LOWEST_UNUSED
         if desc_obj.get("type") == "CONST":
@@ -477,6 +490,47 @@ def run_sieve(
         if not pruned_this_pass:
             break
 
+    # Handle ⊥ class (unseen pixels with pullback=None)
+    # Collect all output pixels that have no class assignment (class_map=None)
+    unseen_pixels = {}  # (train_idx, p_out) -> color
+    for i in range(len(Yout)):
+        H_out = len(Yout[i])
+        W_out = len(Yout[i][0]) if H_out > 0 else 0
+        class_map_i = class_maps[i]
+        Yout_i = Yout[i]
+
+        for r in range(H_out):
+            for c in range(W_out):
+                idx = r * W_out + c
+                if class_map_i[idx] is None:
+                    # Unseen pixel (pullback was None)
+                    unseen_pixels[(i, (r, c))] = Yout_i[r][c]
+
+    # Check if unseen pixels have consistent color across all trainings
+    bottom_const = None
+    if unseen_pixels:
+        colors = set(unseen_pixels.values())
+        if len(colors) == 1:
+            # Consistent - create ⊥ CONST
+            c = list(colors)[0]
+            bottom_const = f"CONST(c={c})"
+        else:
+            # Inconsistent - emit missing_descriptor for ⊥
+            examples = []
+            for (i, p_out), color in list(unseen_pixels.items())[:3]:
+                examples.append({
+                    "train_idx": i,
+                    "p_out": list(p_out),
+                    "expected": color
+                })
+            return {
+                "status": "missing_descriptor",
+                "assignment": {},
+                "cost_order": COST_ORDER,
+                "prune_log": prune_log,
+                "missing": [{"cid": "⊥", "examples": examples}]
+            }
+
     # Check for empty classes
     missing = []
     for cid in all_cids:
@@ -531,6 +585,10 @@ def run_sieve(
         )
         best = remaining_sorted[0]
         assignment[str(cid)] = best[1]
+
+    # Add ⊥ class if unseen pixels exist and are consistent
+    if bottom_const is not None:
+        assignment["⊥"] = bottom_const
 
     return {
         "status": "exact",
@@ -588,8 +646,8 @@ def _self_check_sieve():
 
     assert result["status"] == "exact", f"Expected exact, got {result['status']}"
     assert "0" in result["assignment"], "Class 0 missing in assignment"
-    assert "tile" in result["assignment"]["0"], \
-        f"Expected tile (lower cost), got {result['assignment']['0']}"
+    assert "KEEP:tile" in result["assignment"]["0"], \
+        f"Expected KEEP:tile (lower cost), got {result['assignment']['0']}"
 
     # Test 2: Missing descriptor
     # Change output so neither identity nor tile works
