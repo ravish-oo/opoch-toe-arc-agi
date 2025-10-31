@@ -65,14 +65,14 @@ I’m not expanding into sub-tasks here; this is the top-level plan you asked fo
 **Reviewer produces:** tests that partial KEEP is rejected; tile vs identity counterexample where sieve must later pick tile.
 **Done when:** receipts list admitted KEEP(view) per class with pixel counts.
 
-# WO-09 — VALUE laws (CONST, reducers, RECOLOR π, BLOCK(k))
+# WO-09 — VALUE laws (CONST, reducers, RECOLOR π, BLOCK(k)) ✅ COMPLETE
 
 **Goal:** all non-copy laws proven deterministically.
 **Scope:** CONST; UNIQUE/ARGMAX/LOWEST_UNUSED with deterministic ties; RECOLOR π learned per class from class_map_i; BLOCK(k) with class-anchor convention.
 **Reviewer produces:** recolor goldens; reducer determinism tests; BLOCK(k) motif exactness tests.
 **Done when:** receipts show admitted VALUE laws and parameters; recolor/reducer/Block goldens pass.
 
-# WO-10 — Class pullback & Sieve
+# WO-10 — Class pullback & Sieve ✅ COMPLETE
 
 **Goal:** global exactness without search.
 **Scope:** build `class_map_i` via TEST→OUT + shape_inv; implement sieve pass order; emit `missing_descriptor` if any K_class empties; fixed cost order for final pick.
