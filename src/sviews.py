@@ -559,6 +559,30 @@ def build_sviews(G: IntGrid) -> List[SView]:
     return closure
 
 
+def build_sviews_order_hash(sviews: List[SView], shape: Tuple[int, int]) -> str:
+    """
+    WO-ND3 Part A: Compute order_hash for sviews list.
+
+    Args:
+        sviews: List of SView objects
+        shape: (H, W) for signature computation
+
+    Returns:
+        SHA256 hash of stable keys (kind, params, dom_size, sig)
+    """
+    import hashlib
+
+    order_keys = []
+    for v in sviews:
+        # Serialize params deterministically
+        params_str = str(sorted(v.params.items()))
+        sig = compute_image_signature(v, shape)
+        order_keys.append((v.kind, params_str, v.dom_size, sig))
+
+    order_hash = hashlib.sha256(str(order_keys).encode('utf-8')).hexdigest()
+    return order_hash
+
+
 # ============================================================================
 # SELF-CHECK (algebraic debugging)
 # ============================================================================

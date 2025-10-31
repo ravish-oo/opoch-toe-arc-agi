@@ -75,17 +75,21 @@ def run_task_once(
         # (must be fixed before reversing to ensure determinism)
         Xtest_raw = train_pairs[0]["input"]
 
-    # Reverse train order if requested (AFTER fixing test input)
-    if train_order == "rev":
-        train_pairs = list(reversed(train_pairs))
+    # WO-ND2 fix: Assign original indices BEFORE reversing
+    train_pairs_with_ids = [(i, pair) for i, pair in enumerate(train_pairs)]
 
-    if len(train_pairs) == 0:
+    # Reverse train order if requested (AFTER assigning original indices)
+    if train_order == "rev":
+        train_pairs_with_ids = list(reversed(train_pairs_with_ids))
+
+    if len(train_pairs_with_ids) == 0:
         doc = receipts.finalize()
         return (None, doc, receipts.hash_receipts(doc))
 
-    # Extract raw grids
-    Xin_raw = [pair["input"] for pair in train_pairs]
-    Yout_raw = [pair["output"] for pair in train_pairs]
+    # Extract raw grids with original indices
+    Xin_raw = [pair["input"] for _, pair in train_pairs_with_ids]
+    Yout_raw = [pair["output"] for _, pair in train_pairs_with_ids]
+    orig_indices = [orig_i for orig_i, _ in train_pairs_with_ids]
 
     # 1. Present all grids
     morphisms.init()
@@ -94,6 +98,10 @@ def run_task_once(
     # Build palette map (train inputs + test input)
     Π = present.build_palette_map(Xin_raw, Xtest_raw)
     Π_inv = {v: k for k, v in Π.items()}
+
+    # WO-ND0: Log palette_canon receipt for determinism verification
+    palette_canon = present.build_palette_canon_receipt(Xin_raw, Xtest_raw, Π)
+    receipts.log("present_palette_canon", palette_canon)
 
     # Present all training inputs
     Xin_presented = []
@@ -104,11 +112,14 @@ def run_task_once(
         P_in_list.append(frame)
 
     # Present all training outputs
+    # WO-ND2 fix: Pair outputs with original train indices
     Yout_presented = []
+    Yout_with_ids = []
     P_out_list = []
-    for grid in Yout_raw:
+    for i, grid in enumerate(Yout_raw):
         presented, frame = present.present_output(grid, Π)
         Yout_presented.append(presented)
+        Yout_with_ids.append((orig_indices[i], presented))
         P_out_list.append(frame)
 
     # Present test input
@@ -131,6 +142,9 @@ def run_task_once(
     # Build sviews
     sviews_list = sviews.build_sviews(Xtest_presented)
 
+    # WO-ND3 Part A: Compute order_hash for determinism verification
+    sviews_order_hash = sviews.build_sviews_order_hash(sviews_list, (H_test, W_test))
+
     # Log sviews receipt
     receipts.log("sviews", {
         "count": len(sviews_list),
@@ -138,6 +152,7 @@ def run_task_once(
         "views": [{"name": v.name if hasattr(v, 'name') else str(v)[:30]} for v in sviews_list[:5]],
         "proof_samples": [],
         "closure_capped": len(sviews_list) >= 128,
+        "order_hash": sviews_order_hash,
         "examples": {}
     })
 
@@ -204,7 +219,7 @@ def run_task_once(
 
     try:
         Q = truth.build_truth_partition(
-            Xtest_presented, sviews_list, components_list, sviews_meta, frames, Yout_presented
+            Xtest_presented, sviews_list, components_list, sviews_meta, frames, Yout_with_ids
         )
     except AssertionError:
         # Truth partition failed - finalize and return

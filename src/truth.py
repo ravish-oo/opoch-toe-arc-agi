@@ -155,17 +155,19 @@ def test_to_out(
 def check_single_valued(
     part: Partition,
     frames: Dict[str, Any],
-    train_outputs_presented: List[IntGrid]
+    train_outputs_with_ids: List[Tuple[int, IntGrid]]
 ) -> Tuple[bool, Optional[Dict]]:
     """
     Verify every class has ≤1 output color across all trainings.
+
+    WO-ND2 fix: Accept outputs paired with original train indices.
 
     Uses TEST→OUT conjugation; skips OOB mappings.
 
     Args:
         part: Final partition
         frames: Dict with P_test and P_out list
-        train_outputs_presented: List of posed training outputs
+        train_outputs_with_ids: List of (orig_train_idx, posed_output) tuples
 
     Returns:
         (ok, witness) where witness has {cid, train_idx, coord_out, colors_seen}
@@ -179,8 +181,9 @@ def check_single_valued(
     for cid, coords in enumerate(classes_list):
         colors_seen = set()
 
-        for train_idx, Y_i in enumerate(train_outputs_presented):
-            P_out = P_out_list[train_idx]
+        # WO-ND2: Iterate by sorted original train indices
+        for orig_train_idx, Y_i in sorted(train_outputs_with_ids, key=lambda t: t[0]):
+            P_out = P_out_list[orig_train_idx]
             H_out = len(Y_i)
             W_out = len(Y_i[0]) if H_out > 0 else 0
 
@@ -319,10 +322,12 @@ def paige_tarjan_refine(
     components: List,
     residue_meta: Dict[str, int],
     frames: Dict[str, Any],
-    train_outputs_presented: List[IntGrid]
+    train_outputs_with_ids: List[Tuple[int, IntGrid]]
 ) -> Tuple[List[int], List[Dict], Dict[str, int]]:
     """
     Refine partition via Paige-Tarjan with fixed predicate order.
+
+    WO-ND2 fix: Iterate training outputs by sorted original indices for determinism.
 
     Predicate order: input_color ≺ sview_image (component/residue/overlap) ≺ parity
 
@@ -410,11 +415,12 @@ def paige_tarjan_refine(
             coords = sorted(classes_map[cid], key=lambda p: (p[0], p[1]))
 
             # Check for contradiction via outputs
+            # WO-ND2: Iterate by sorted original train indices (not list order)
             colors_by_train = []
             witness = None
 
-            for train_idx, Y_i in enumerate(train_outputs_presented):
-                P_out = P_out_list[train_idx]
+            for orig_train_idx, Y_i in sorted(train_outputs_with_ids, key=lambda t: t[0]):
+                P_out = P_out_list[orig_train_idx]
                 H_out = len(Y_i)
                 W_out = len(Y_i[0]) if H_out > 0 else 0
 
@@ -438,7 +444,7 @@ def paige_tarjan_refine(
                             witness_coord = coord_out
 
                 if colors_seen_list:
-                    colors_by_train.append((train_idx, colors_seen_list, witness_coord))
+                    colors_by_train.append((orig_train_idx, colors_seen_list, witness_coord))
 
             # Gather all colors seen (preserve first-seen order)
             all_colors_list = []
@@ -570,10 +576,12 @@ def build_truth_partition(
     components: List,
     residue_meta: Dict[str, int],
     frames: Dict[str, Any],
-    train_outputs_presented: List[IntGrid]
+    train_outputs_with_ids: List[Tuple[int, IntGrid]]
 ) -> Partition:
     """
     Build coarsest truth partition Q via must-link + PT.
+
+    WO-ND2 fix: Accept outputs paired with original train indices for deterministic iteration.
 
     Args:
         G_test_presented: Presented test input
@@ -581,7 +589,7 @@ def build_truth_partition(
         components: Components from build_components (WO-05)
         residue_meta: {"row_gcd": int, "col_gcd": int} for PT predicates
         frames: Dict with P_test, P_out list
-        train_outputs_presented: List of posed training outputs
+        train_outputs_with_ids: List of (orig_train_idx, posed_output) tuples
 
     Returns:
         Partition object with final cid_of
@@ -592,18 +600,15 @@ def build_truth_partition(
     if H == 0 or W == 0:
         return Partition(0, 0, [])
 
-    # Initialize union-find (row-major)
-    uf = UnionFind(H * W)
+    # WO-ND3 Part B: Build deterministic must-link edge set
+    edge_set = set()
 
-    # Must-link counts
-    sview_edges = 0
-    comp_edges = 0
-
-    # Phase 1: Must-link from S-views
+    # 1. Structural S-views edges
     for view in sviews:
         for i in range(H):
             for j in range(W):
                 x = (i, j)
+                idx_x = i * W + j
 
                 # Get M(x)
                 if hasattr(view, 'apply'):
@@ -613,33 +618,65 @@ def build_truth_partition(
                 else:
                     continue
 
-                if y is not None:
-                    idx_x = x[0] * W + x[1]
+                if y is not None and y != x:
                     idx_y = y[0] * W + y[1]
-                    if uf.union(idx_x, idx_y):
-                        sview_edges += 1
+                    # Add edge (min, max) for determinism
+                    edge_set.add((min(idx_x, idx_y), max(idx_x, idx_y)))
 
-    # Phase 2: Must-link from component folds
+    # 2. Component fold edges
     from components import component_anchor_views
 
     comp_views = component_anchor_views(components)
     for view in comp_views:
         apply_fn = view['apply']
-        anchor = view['anchor']
 
         for i in range(H):
             for j in range(W):
                 x = (i, j)
+                idx_x = i * W + j
                 y = apply_fn(x)
 
-                if y is not None:
-                    idx_x = x[0] * W + x[1]
+                if y is not None and y != x:
                     idx_y = y[0] * W + y[1]
-                    if uf.union(idx_x, idx_y):
-                        comp_edges += 1
+                    # Add edge (min, max) for determinism
+                    edge_set.add((min(idx_x, idx_y), max(idx_x, idx_y)))
 
-    # Phase 3: Freeze UF and extract initial partition
-    cid_of_after_mustlink = uf.get_classes()
+    # Sort edges deterministically
+    edges = sorted(edge_set)
+
+    # Initialize union-find and apply edges in sorted order
+    uf = UnionFind(H * W)
+    for u, v in edges:
+        uf.union(u, v)
+
+    # WO-ND3 Part C: Deterministic class reindex after UF
+    # Group pixels by UF root
+    root = [uf.find(i) for i in range(H * W)]
+    groups = {}  # root -> list of pixels
+    for i, r in enumerate(root):
+        if r not in groups:
+            groups[r] = []
+        groups[r].append(i)
+
+    # Stable representative for each group = min row-major pixel
+    items = [(min(pixels), pixels) for pixels in groups.values()]
+    items.sort(key=lambda t: t[0])  # ascending by min pixel
+
+    # Build cid_of by assigning new ids in this order
+    cid_of_after_mustlink = [None] * (H * W)
+    for new_cid, (_, pixels) in enumerate(items):
+        for i in pixels:
+            cid_of_after_mustlink[i] = new_cid
+
+    # WO-ND3 Part D: Compute receipts for determinism verification
+    import hashlib
+
+    # mustlink_edges hash
+    mustlink_edges_hash = hashlib.sha256(str(edges).encode('utf-8')).hexdigest()
+
+    # class_reindex hash (min pixel per class)
+    min_pixels_per_class = [min_pix for min_pix, _ in items]
+    class_reindex_hash = hashlib.sha256(str(min_pixels_per_class).encode('utf-8')).hexdigest()
 
     # Compute PT predicate counts before calling PT (for error receipts)
     _, pt_pred_counts_preview = build_pt_predicates(
@@ -655,7 +692,7 @@ def build_truth_partition(
             components,
             residue_meta,
             frames,
-            train_outputs_presented
+            train_outputs_with_ids
         )
     except AssertionError as e:
         # Parse diagnostic if present
@@ -688,9 +725,13 @@ def build_truth_partition(
             "splits": [],
             "final_classes": 0,
             "single_valued_ok": False,
-            "mustlink_sources": {
-                "sviews": sview_edges,
-                "components": comp_edges
+            "mustlink_edges": {
+                "count": len(edges),
+                "order_hash": mustlink_edges_hash
+            },
+            "class_reindex": {
+                "count": len(items),
+                "order_hash": class_reindex_hash
             },
             "pt_predicate_counts": pt_pred_counts_preview,
             "pt_last_contradiction": pt_last_contradiction,
@@ -707,16 +748,20 @@ def build_truth_partition(
     part = Partition(H, W, cid_of)
 
     # Verify single-valued
-    ok, witness = check_single_valued(part, frames, train_outputs_presented)
+    ok, witness = check_single_valued(part, frames, train_outputs_with_ids)
 
     # Build receipt
     receipt = {
         "splits": splits,
         "final_classes": max(cid_of) + 1 if cid_of else 0,
         "single_valued_ok": ok,
-        "mustlink_sources": {
-            "sviews": sview_edges,
-            "components": comp_edges
+        "mustlink_edges": {
+            "count": len(edges),
+            "order_hash": mustlink_edges_hash
+        },
+        "class_reindex": {
+            "count": len(items),
+            "order_hash": class_reindex_hash
         },
         "pt_predicate_counts": pt_predicate_counts,
         "examples": {}

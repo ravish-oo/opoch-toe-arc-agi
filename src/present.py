@@ -31,6 +31,8 @@ def build_palette_map(train_inputs: List[IntGrid], test_input: IntGrid) -> Palet
     """
     Build canonical palette map from all training inputs + test input.
 
+    WO-ND0: Order-invariant palette canon using canonical grid concatenation.
+
     Args:
         train_inputs: All training input grids
         test_input: Test input grid
@@ -39,24 +41,35 @@ def build_palette_map(train_inputs: List[IntGrid], test_input: IntGrid) -> Palet
         PaletteMap: old_color -> new_color (0, 1, 2, ...)
 
     Order:
-        Sort colors by (frequency desc, first_appearance_index asc, color_value asc)
-        Map to 0, 1, 2, ... in that order
+        1. Sort all input grids by (H, W, flat_tuple) for canonical order
+        2. Concatenate sorted grids row-major
+        3. Sort colors by (frequency desc, first_appearance_index asc, color_value asc)
+        4. Map to 0, 1, 2, ... in that order
     """
-    # Gather all colors with (color, first_appearance_index)
-    color_first_appearance: Dict[int, int] = {}
-    color_counts: Counter = Counter()
-    appearance_index = 0
-
-    # Process all grids in order: train inputs, then test input
+    # WO-ND0: Build canonical order of input grids
     all_inputs = train_inputs + [test_input]
 
-    for grid in all_inputs:
-        for row in grid:
-            for color in row:
-                if color not in color_first_appearance:
-                    color_first_appearance[color] = appearance_index
-                    appearance_index += 1
-                color_counts[color] += 1
+    items = []
+    for G in all_inputs:
+        H = len(G)
+        W = len(G[0]) if H > 0 else 0
+        flat = tuple(v for row in G for v in row)  # raw ints
+        items.append(((H, W, flat), flat))
+
+    # Sort by (H, W, flat) for canonical order
+    items.sort(key=lambda x: x[0])
+
+    # Build canonical concatenation
+    canonical_flat = tuple(v for _, flat in items for v in flat)
+
+    # Gather all colors with (color, first_appearance_index) from canonical concatenation
+    color_first_appearance: Dict[int, int] = {}
+    color_counts: Counter = Counter()
+
+    for idx, color in enumerate(canonical_flat):
+        if color not in color_first_appearance:
+            color_first_appearance[color] = idx
+        color_counts[color] += 1
 
     # Sort by (frequency desc, first_appearance asc, color_value asc)
     colors_sorted = sorted(
@@ -68,6 +81,63 @@ def build_palette_map(train_inputs: List[IntGrid], test_input: IntGrid) -> Palet
     palette_map = {old_color: new_color for new_color, old_color in enumerate(colors_sorted)}
 
     return palette_map
+
+
+def build_palette_canon_receipt(train_inputs: List[IntGrid], test_input: IntGrid, palette_map: PaletteMap) -> Dict:
+    """
+    Build palette_canon receipt for WO-ND0 determinism verification.
+
+    Args:
+        train_inputs: All training input grids
+        test_input: Test input grid
+        palette_map: The computed palette map
+
+    Returns:
+        Dict with order_hash, freq_top5, first_idx_top5
+    """
+    import hashlib
+
+    # Rebuild canonical concatenation (same logic as build_palette_map)
+    all_inputs = train_inputs + [test_input]
+
+    items = []
+    for G in all_inputs:
+        H = len(G)
+        W = len(G[0]) if H > 0 else 0
+        flat = tuple(v for row in G for v in row)
+        items.append(((H, W, flat), flat))
+
+    items.sort(key=lambda x: x[0])
+    canonical_flat = tuple(v for _, flat in items for v in flat)
+
+    # Compute order_hash
+    order_hash = hashlib.sha256(str(canonical_flat).encode('utf-8')).hexdigest()
+
+    # Compute freq and first_idx for all colors
+    color_first_appearance: Dict[int, int] = {}
+    color_counts: Counter = Counter()
+
+    for idx, color in enumerate(canonical_flat):
+        if color not in color_first_appearance:
+            color_first_appearance[color] = idx
+        color_counts[color] += 1
+
+    # Sort by final ranking (same as palette map)
+    colors_sorted = sorted(
+        color_first_appearance.keys(),
+        key=lambda c: (-color_counts[c], color_first_appearance[c], c)
+    )
+
+    # Top 5 by final ranking
+    freq_top5 = [[c, color_counts[c]] for c in colors_sorted[:5]]
+    first_idx_top5 = [[c, color_first_appearance[c]] for c in colors_sorted[:5]]
+
+    return {
+        "order": "lex(H,W,flat)",
+        "freq_top5": freq_top5,
+        "first_idx_top5": first_idx_top5,
+        "order_hash": order_hash
+    }
 
 
 def apply_palette(grid: IntGrid, pm: PaletteMap, allow_passthrough: bool = False) -> IntGrid:

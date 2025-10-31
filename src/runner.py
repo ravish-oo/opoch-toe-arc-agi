@@ -73,6 +73,10 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
     Π = present.build_palette_map(Xin_raw, Xtest_raw)
     Π_inv = {v: k for k, v in Π.items()}
 
+    # WO-ND0: Log palette_canon receipt for determinism verification
+    palette_canon = present.build_palette_canon_receipt(Xin_raw, Xtest_raw, Π)
+    receipts.log("present_palette_canon", palette_canon)
+
     # Present all training inputs
     Xin_presented = []
     P_in_list = []
@@ -82,11 +86,14 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
         P_in_list.append(frame)
 
     # Present all training outputs
+    # WO-ND2 fix: Pair outputs with original train indices
     Yout_presented = []
+    Yout_with_ids = []
     P_out_list = []
-    for grid in Yout_raw:
+    for orig_idx, grid in enumerate(Yout_raw):
         presented, frame = present.present_output(grid, Π)
         Yout_presented.append(presented)
+        Yout_with_ids.append((orig_idx, presented))
         P_out_list.append(frame)
 
     # Present test input
@@ -109,6 +116,9 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
     # Build sviews
     sviews_list = sviews.build_sviews(Xtest_presented)
 
+    # WO-ND3 Part A: Compute order_hash for determinism verification
+    sviews_order_hash = sviews.build_sviews_order_hash(sviews_list, (H_test, W_test))
+
     # Log sviews receipt (derived from actual objects)
     receipts.log("sviews", {
         "count": len(sviews_list),
@@ -116,6 +126,7 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
         "views": [{"name": v.name if hasattr(v, 'name') else str(v)[:30]} for v in sviews_list[:5]],
         "proof_samples": [],
         "closure_capped": len(sviews_list) >= 128,
+        "order_hash": sviews_order_hash,
         "examples": {}
     })
 
@@ -182,7 +193,7 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
 
     try:
         Q = truth.build_truth_partition(
-            Xtest_presented, sviews_list, components_list, sviews_meta, frames, Yout_presented
+            Xtest_presented, sviews_list, components_list, sviews_meta, frames, Yout_with_ids
         )
     except AssertionError as e:
         doc = receipts.finalize()
