@@ -546,12 +546,153 @@ def paige_tarjan_refine(
 
             if not split_done:
                 # No predicate could split this contradictory class
+
+                # WO-ND4: Build conjugation audit for witness pixel
+                # Show full TEST→OUT mapping per training to verify frames and conjugation
+                conjugation_audit = []
+                if len(coords) > 0:
+                    p_test = coords[0]  # First pixel in contradictory class (witness test pixel)
+
+                    for orig_train_idx, Y_i in sorted(train_outputs_with_ids, key=lambda t: t[0]):
+                        P_out = P_out_by_id[orig_train_idx]
+                        H_out = len(Y_i)
+                        W_out = len(Y_i[0]) if H_out > 0 else 0
+
+                        # Compute TEST→OUT conjugation
+                        coord_out = test_to_out(p_test, P_test, P_out)
+
+                        # Check bounds and read yout
+                        in_bounds = False
+                        yout = None
+                        if coord_out is not None:
+                            r, c = coord_out
+                            if 0 <= r < H_out and 0 <= c < W_out:
+                                in_bounds = True
+                                yout = Y_i[r][c]
+
+                        # Log full trace for this training
+                        conjugation_audit.append({
+                            "train_idx": orig_train_idx,
+                            "P_test": {
+                                "op": P_test[0],
+                                "anchor": list(P_test[1]),
+                                "shape": list(P_test[2])
+                            },
+                            "P_out": {
+                                "op": P_out[0],
+                                "anchor": list(P_out[1]),
+                                "shape": list(P_out[2])
+                            },
+                            "p_test": list(p_test),
+                            "p_out": list(coord_out) if coord_out else None,
+                            "in_bounds": in_bounds,
+                            "yout": int(yout) if yout is not None else None
+                        })
+
+                # WO-ND5: Build witness class provenance
+                # Show why this class is singleton: component, S-views at pixel, neighbors
+                witness_provenance = {}
+                if len(coords) > 0:
+                    p_test = coords[0]  # Witness pixel
+                    i_test, j_test = p_test
+
+                    # 1. Class size
+                    witness_provenance["class_size"] = len(coords)
+
+                    # 2. Component containing witness pixel
+                    witness_component = None
+                    for comp in components:
+                        if hasattr(comp, 'mask') and p_test in comp.mask:
+                            witness_component = {
+                                "color": comp.color if hasattr(comp, 'color') else None,
+                                "id": comp.comp_id if hasattr(comp, 'comp_id') else None,
+                                "size": len(comp.mask) if hasattr(comp, 'mask') else None
+                            }
+                            break
+                    witness_provenance["component"] = witness_component
+
+                    # 3. Admitted views at pixel (small subset for diagnosis)
+                    # Include: identity, translates with |di|+|dj| ≤ 2, residue, D4-preserving
+                    admitted_views_at_pixel = []
+
+                    for view in sviews:
+                        # Filter to small subset
+                        kind = view.kind if hasattr(view, 'kind') else None
+                        params = view.params if hasattr(view, 'params') else {}
+
+                        include_view = False
+                        if kind == "identity":
+                            include_view = True
+                        elif kind == "translate":
+                            di = params.get('di', 0)
+                            dj = params.get('dj', 0)
+                            if abs(di) + abs(dj) <= 2:  # Manhattan distance ≤ 2
+                                include_view = True
+                        elif kind == "residue":
+                            include_view = True
+                        elif kind == "d4":
+                            include_view = True
+
+                        if not include_view:
+                            continue
+
+                        # Evaluate view at p_test
+                        apply_fn = view.apply_fn if hasattr(view, 'apply_fn') else view.apply if hasattr(view, 'apply') else None
+                        if apply_fn is None:
+                            continue
+
+                        q = apply_fn(p_test)
+
+                        # Check if this creates a link (same color, different pixel)
+                        links = 0
+                        if q is not None and q != p_test:
+                            qi, qj = q
+                            if 0 <= qi < H and 0 <= qj < W:
+                                if G_test[qi][qj] == G_test[i_test][j_test]:
+                                    links = 1
+
+                        admitted_views_at_pixel.append({
+                            "kind": kind,
+                            "params": params,
+                            "links": links
+                        })
+
+                    witness_provenance["admitted_views_at_pixel"] = admitted_views_at_pixel
+
+                    # 4. Equal-color neighbors (sanity check for visual isolation)
+                    test_color = G_test[i_test][j_test]
+                    neighbors_4 = 0
+                    neighbors_8 = 0
+
+                    # 4-neighborhood: (i±1,j), (i,j±1)
+                    for di, dj in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        ni, nj = i_test + di, j_test + dj
+                        if 0 <= ni < H and 0 <= nj < W:
+                            if G_test[ni][nj] == test_color:
+                                neighbors_4 += 1
+
+                    # 8-neighborhood: add diagonals
+                    for di, dj in [(-1, -1), (-1, 1), (1, -1), (1, 1)]:
+                        ni, nj = i_test + di, j_test + dj
+                        if 0 <= ni < H and 0 <= nj < W:
+                            if G_test[ni][nj] == test_color:
+                                neighbors_8 += 1
+
+                    neighbors_8 += neighbors_4  # 8-neighborhood includes 4-neighborhood
+
+                    witness_provenance["equal_color_neighbors"] = {
+                        "4-neighborhood": neighbors_4,
+                        "8-neighborhood": neighbors_8
+                    }
+
                 # Build diagnostic payload
                 pt_last_contradiction = {
                     "cid": cid,
                     "colors_seen": all_colors_list,  # WO-ND2: Use list (first-seen order)
                     "witness": list(witness_coord_out) if witness_coord_out else None,
-                    "tried": tried_predicates
+                    "tried": tried_predicates,
+                    "conjugation_audit": conjugation_audit,  # WO-ND4: Full TEST→OUT trace
+                    "witness_provenance": witness_provenance  # WO-ND5: Why is class singleton?
                 }
 
                 # Store in a way that build_truth_partition can access
@@ -704,7 +845,9 @@ def build_truth_partition(
             "cid": -1,
             "colors_seen": [],
             "witness": None,
-            "tried": []
+            "tried": [],
+            "conjugation_audit": [],  # WO-ND4: Empty by default
+            "witness_provenance": {}  # WO-ND5: Empty by default
         }
 
         if "|||DIAGNOSTIC:" in error_str:
