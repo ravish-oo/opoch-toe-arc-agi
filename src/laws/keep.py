@@ -100,30 +100,33 @@ def enumerate_keep_candidates(H: int, W: int,
                                        make_translate(di, dj)))
 
     # 4. Residue shifts (if sviews admitted gcd > 1)
+    # Enumerate all residue classes: shifts by 1, 2, ..., gcd-1 (mod gcd)
     row_gcd = sviews_meta.get("row_gcd", 1)
     col_gcd = sviews_meta.get("col_gcd", 1)
 
     if row_gcd > 1:
-        def make_residue_row(p_val):
-            def V(x):
-                i, j = x
-                nj = (j + p_val) % W
-                return (i, nj)
-            return V
+        for shift in range(1, row_gcd):
+            def make_residue_row(p_val):
+                def V(x):
+                    i, j = x
+                    nj = (j + p_val) % W
+                    return (i, nj)
+                return V
 
-        candidates.append(KeepCandidate("residue_row", {"p": row_gcd},
-                                       make_residue_row(row_gcd)))
+            candidates.append(KeepCandidate("residue_row", {"p": shift},
+                                           make_residue_row(shift)))
 
     if col_gcd > 1:
-        def make_residue_col(p_val):
-            def V(x):
-                i, j = x
-                ni = (i + p_val) % H
-                return (ni, j)
-            return V
+        for shift in range(1, col_gcd):
+            def make_residue_col(p_val):
+                def V(x):
+                    i, j = x
+                    ni = (i + p_val) % H
+                    return (ni, j)
+                return V
 
-        candidates.append(KeepCandidate("residue_col", {"p": col_gcd},
-                                       make_residue_col(col_gcd)))
+            candidates.append(KeepCandidate("residue_col", {"p": shift},
+                                           make_residue_col(shift)))
 
     # 5. Tile variants (use test canvas H, W)
     # tile: simple modulo
@@ -175,24 +178,8 @@ def enumerate_keep_candidates(H: int, W: int,
 
     candidates.append(KeepCandidate("tile_checkerboard_flip", {}, make_tile_checkerboard_flip()))
 
-    # 6. Block inverse (k = divisors of gcd(H,W), ascending, cap at 10)
-    def get_divisors(n):
-        """Get divisors of n in ascending order."""
-        divisors = []
-        for i in range(1, int(math.sqrt(n)) + 1):
-            if n % i == 0:
-                divisors.append(i)
-                if i != n // i:
-                    divisors.append(n // i)
-        return sorted(divisors)
-
-    gcd_hw = math.gcd(H, W)
-    divisors_list = get_divisors(gcd_hw)
-
-    for k in divisors_list[:10]:  # cap at 10
-        if k == 1:
-            continue  # Skip k=1 (same as identity)
-
+    # 6. Block inverse (k ∈ {2,3} for finite vocabulary)
+    for k in [2, 3]:
         def make_block_inverse(k_val):
             def V(x):
                 i, j = x
@@ -230,6 +217,68 @@ def enumerate_keep_candidates(H: int, W: int,
         candidates.append(KeepCandidate("offset", {"b": b, "d": d}, make_offset(b, d)))
 
     return candidates
+
+
+def admit_keep_for_class_v2(
+    cid: int,
+    class_maps: List[List[Optional[int]]],
+    Xin: List[IntGrid],
+    Yout: List[IntGrid],
+    P_test: Frame,
+    P_in_list: List[Frame],
+    P_out_list: List[Frame],
+    shape_law: Tuple[str, Tuple[int, int, int, int]],
+    candidates: List[KeepCandidate],
+) -> List[Dict[str, Any]]:
+    """
+    Return admitted KEEP candidates for this class using class_maps.
+
+    Reject if:
+      - V is undefined on ANY training pixel of the class
+      - Color copied through conjugation differs from Yout
+
+    Args:
+        cid: Class id
+        class_maps: List of class maps (one per training pair)
+                   class_maps[i][p_idx] = class_id or None
+        Xin: Posed+anchored train inputs
+        Yout: Posed-only train outputs
+        P_test: Test frame (d4, anchor, shape)
+        P_in_list: Train input frames
+        P_out_list: Train output frames
+        shape_law: (type, (a, b, c, d)) - not used for proof
+        candidates: List of KeepCandidate to test
+
+    Returns:
+        List of admitted descriptors with proofs
+    """
+    admitted = []
+
+    for candidate in candidates:
+        result = _prove_candidate_v2(
+            cid, candidate, class_maps,
+            Xin, Yout, P_test, P_in_list, P_out_list
+        )
+
+        if result["admitted"]:
+            # Build descriptor object for sieve
+            desc_obj = {"view": candidate.name}
+            desc_obj.update(candidate.params)
+            desc_obj["_proof"] = {
+                "trains_checked": result["trains_checked"],
+                "pixels_checked": result["pixels_checked"]
+            }
+            admitted.append(desc_obj)
+        else:
+            # Log rejection with witness for debugging
+            if result.get("witness"):
+                receipts.log("laws_debug", {
+                    "cid": cid,
+                    "descriptor": candidate.descriptor(),
+                    "rejected": result["witness"]
+                })
+
+    return admitted
 
 
 def admit_keep_for_class(
@@ -294,6 +343,178 @@ def admit_keep_for_class(
                 })
 
     return admitted
+
+
+def _prove_candidate_v2(
+    cid: int,
+    candidate: KeepCandidate,
+    class_maps: List[List[Optional[int]]],
+    Xin: List[IntGrid],
+    Yout: List[IntGrid],
+    P_test: Frame,
+    P_in_list: List[Frame],
+    P_out_list: List[Frame],
+) -> Dict[str, Any]:
+    """
+    Prove or disprove a candidate using class_maps for membership.
+
+    Algorithm (WO-LAW-CORE Section B):
+      For each training pair i and each output pixel p_out where class_maps[i][p_idx] == cid:
+        1. Pull back to TEST: q = pose_inv(p_out, P_out^i)
+        2. Apply view: q' = V(q)
+        3. If q' is None: reject with witness
+        4. Map to input: p_in = pose_fwd(anchor_fwd(q', P_in^i.anchor), P_in^i.op)
+        5. If p_in is None or OOB: reject with witness
+        6. Check colors: if Xin^i[p_in] ≠ Yout^i[p_out]: reject with witness
+
+    Returns:
+        {
+            "admitted": bool,
+            "trains_checked": int,
+            "pixels_checked": int,
+            "witness": {...} or None
+        }
+    """
+    trains_checked = 0
+    pixels_checked = 0
+
+    # For each training pair
+    for train_idx, (Xin_i, Yout_i, P_in, P_out, class_map_i) in enumerate(
+        zip(Xin, Yout, P_in_list, P_out_list, class_maps)
+    ):
+        H_out = len(Yout_i)
+        W_out = len(Yout_i[0]) if H_out > 0 else 0
+        H_in = len(Xin_i)
+        W_in = len(Xin_i[0]) if H_in > 0 else 0
+
+        trains_checked += 1
+
+        # For each output pixel in row-major order
+        for i_out in range(H_out):
+            for j_out in range(W_out):
+                p_idx = i_out * W_out + j_out
+
+                # Check if this pixel belongs to our class
+                if p_idx >= len(class_map_i) or class_map_i[p_idx] != cid:
+                    continue  # Not in this class
+
+                pixels_checked += 1
+                p_out = (i_out, j_out)
+
+                # Step 1: Pull back to TEST frame
+                op_out, _, shape_out = P_out
+                q = morphisms.pose_inv(p_out, op_out, shape_out)
+                if q is None:
+                    # This shouldn't happen for valid class_map, but check anyway
+                    return {
+                        "admitted": False,
+                        "trains_checked": trains_checked,
+                        "pixels_checked": pixels_checked,
+                        "witness": {
+                            "train_idx": train_idx,
+                            "p_out": list(p_out),
+                            "error": "pose_inv returned None"
+                        }
+                    }
+
+                # Step 2: Apply view V in TEST frame
+                q_prime = candidate.V(q)
+                if q_prime is None:
+                    # Undefined: reject with witness
+                    return {
+                        "admitted": False,
+                        "trains_checked": trains_checked,
+                        "pixels_checked": pixels_checked,
+                        "witness": {
+                            "train_idx": train_idx,
+                            "p_out": list(p_out),
+                            "q_test": list(q),
+                            "q_after_V": None,
+                            "reason": "V undefined"
+                        }
+                    }
+
+                # Step 3: Map to input frame
+                op_in, anchor_in, shape_in = P_in
+
+                # anchor_fwd: apply anchor offset
+                q_double_prime = morphisms.anchor_fwd(q_prime, anchor_in)
+                if q_double_prime is None:
+                    return {
+                        "admitted": False,
+                        "trains_checked": trains_checked,
+                        "pixels_checked": pixels_checked,
+                        "witness": {
+                            "train_idx": train_idx,
+                            "p_out": list(p_out),
+                            "q_test": list(q),
+                            "q_after_V": list(q_prime),
+                            "reason": "anchor_fwd returned None"
+                        }
+                    }
+
+                # pose_fwd: apply D4 transformation
+                p_in = morphisms.pose_fwd(q_double_prime, op_in, shape_in)
+                if p_in is None:
+                    return {
+                        "admitted": False,
+                        "trains_checked": trains_checked,
+                        "pixels_checked": pixels_checked,
+                        "witness": {
+                            "train_idx": train_idx,
+                            "p_out": list(p_out),
+                            "q_test": list(q),
+                            "q_after_V": list(q_prime),
+                            "reason": "pose_fwd returned None"
+                        }
+                    }
+
+                # Check bounds
+                i_in, j_in = p_in
+                if not (0 <= i_in < H_in and 0 <= j_in < W_in):
+                    return {
+                        "admitted": False,
+                        "trains_checked": trains_checked,
+                        "pixels_checked": pixels_checked,
+                        "witness": {
+                            "train_idx": train_idx,
+                            "p_out": list(p_out),
+                            "q_test": list(q),
+                            "q_after_V": list(q_prime),
+                            "p_in": list(p_in),
+                            "reason": "p_in OOB"
+                        }
+                    }
+
+                # Step 4: Compare colors
+                xin_color = Xin_i[i_in][j_in]
+                yout_color = Yout_i[i_out][j_out]
+
+                if xin_color != yout_color:
+                    # Mismatch: reject with first witness
+                    return {
+                        "admitted": False,
+                        "trains_checked": trains_checked,
+                        "pixels_checked": pixels_checked,
+                        "witness": {
+                            "train_idx": train_idx,
+                            "p_out": list(p_out),
+                            "q_test": list(q),
+                            "q_after_V": list(q_prime),
+                            "p_in": list(p_in),
+                            "xin": xin_color,
+                            "yout": yout_color,
+                            "reason": "color mismatch"
+                        }
+                    }
+
+    # All checks passed: admit
+    return {
+        "admitted": True,
+        "trains_checked": trains_checked,
+        "pixels_checked": pixels_checked,
+        "witness": None
+    }
 
 
 def _prove_candidate(

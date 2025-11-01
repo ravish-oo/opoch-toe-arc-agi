@@ -232,14 +232,10 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
             "receipts": doc
         }
 
-    # 6. Admit laws per class
-    keep.init()
-    value.init()
+    # 6. Precompute class evidence (WO-LAW-CORE Section A)
+    import class_map as class_map_module
 
-    # Get KEEP catalogue
-    keep_candidates = descriptor_registry.keep_catalogue(H_test, W_test, sviews_meta)
-
-    # Build class pixels map (TEST frame)
+    # Build class_pixels_test[cid] from truth partition
     class_pixels_test = {}
     for idx, cid in enumerate(Q.cid_of):
         if cid not in class_pixels_test:
@@ -248,88 +244,154 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
         c = idx % W_test
         class_pixels_test[cid].append((r, c))
 
-    # Admit KEEP laws per class
+    # Build class maps for each training pair: out_coord → cid
+    class_maps = []
+    class_hits = {}  # class_hits[cid][orig_i] = pixel count
+
+    for orig_i in range(len(train_pairs)):
+        _, _, (H_out_i, W_out_i) = P_out_list[orig_i]
+
+        # Build class map for this training output
+        class_map_i = class_map_module.build_class_map_i(
+            H_out_i, W_out_i, P_test, P_out_list[orig_i], Q
+        )
+        class_maps.append(class_map_i)
+
+        # Count observed pixels per class
+        for p_idx, cid in enumerate(class_map_i):
+            if cid is not None:
+                if cid not in class_hits:
+                    class_hits[cid] = {}
+                if orig_i not in class_hits[cid]:
+                    class_hits[cid][orig_i] = 0
+                class_hits[cid][orig_i] += 1
+
+    # Log class_maps receipt
+    class_maps_receipt = []
+    for orig_i in range(len(train_pairs)):
+        _, _, (H_out_i, W_out_i) = P_out_list[orig_i]
+        observed = sum(1 for cid in class_maps[orig_i] if cid is not None)
+        class_maps_receipt.append({
+            "orig_i": orig_i,
+            "H": H_out_i,
+            "W": W_out_i,
+            "observed": observed
+        })
+    receipts.log("selection", {"class_maps": class_maps_receipt})
+
+    # 7. Section B: KEEP law admission (WO-LAW-CORE)
+    import laws.keep as keep_law
+
+    # Enumerate KEEP candidates (using sviews_meta from earlier)
+    # sviews_meta already contains row_gcd, col_gcd from line 112-115
+    keep_candidates = keep_law.enumerate_keep_candidates(H_test, W_test, sviews_meta)
+
+    # Admit KEEP laws per class using class_maps for membership
     keep_admitted = {}
-    all_cids = set(Q.cid_of)
+    all_cids = sorted(set(Q.cid_of))
+    keep_receipts = []
 
     for cid in all_cids:
-        pixels = class_pixels_test.get(cid, [])
-        if not pixels:
-            keep_admitted[cid] = []
-            continue
-
-        admitted = keep.admit_keep_for_class(
-            cid, pixels, Xin_presented, Yout_presented,
+        # Admit KEEP for this class
+        admitted = keep_law.admit_keep_for_class_v2(
+            cid, class_maps, Xin_presented, Yout_presented,
             P_test, P_in_list, P_out_list, shape, keep_candidates
         )
-        # Extract descriptor objects (dict with "view" + params)
-        keep_admitted[cid] = []
-        for candidate in keep_candidates:
-            # Check if this candidate was admitted
-            desc_str = candidate.descriptor()
-            is_admitted = any(a.get("descriptor") == desc_str for a in admitted)
-            if is_admitted:
-                # Build descriptor object for sieve
-                desc_obj = {"view": candidate.name, **candidate.params}
-                keep_admitted[cid].append(desc_obj)
 
-    # Admit VALUE laws per class
+        # Store descriptor objects for sieve
+        keep_admitted[cid] = admitted
+
+        # Format descriptor strings for receipt
+        def format_keep_desc(desc):
+            view = desc.get("view", "unknown")
+            params = {k: v for k, v in desc.items() if k not in ["view", "_proof"]}
+            if params:
+                param_str = ",".join(f"{k}={v}" for k, v in sorted(params.items()))
+                return f"{view}({param_str})"
+            return view
+
+        # Collect receipt
+        keep_receipts.append({
+            "class_id": cid,
+            "admitted_keep": [format_keep_desc(a) for a in admitted],
+            "count": len(admitted),
+            "trains_checked": admitted[0]["_proof"]["trains_checked"] if admitted else len(Xin_presented)
+        })
+
+    # Log all KEEP admissions together
+    receipts.log("laws_keep", {"classes": keep_receipts})
+
+    # 8. Section C: VALUE law admission (WO-LAW-CORE)
+    import laws.value as value_law
+
+    # Admit VALUE laws per class using class_maps for membership
     value_admitted = {}
+    value_receipts = []
+
     for cid in all_cids:
-        pixels = class_pixels_test.get(cid, [])
-        if not pixels:
-            value_admitted[cid] = []
-            continue
-
-        result = value.admit_value_for_class(
-            cid, pixels, Xin_presented, Yout_presented, Xtest_presented,
-            P_test, P_in_list, P_out_list
+        # Admit VALUE for this class
+        admitted = value_law.admit_value_for_class_v2(
+            cid, class_pixels_test[cid], class_maps, Xin_presented, Yout_presented,
+            Xtest_presented, P_test, P_in_list, P_out_list
         )
-        # Convert string descriptors to objects for sieve
-        value_admitted[cid] = []
-        for desc_str in result.get("admitted", []):
-            if desc_str.startswith("CONST(c="):
-                c = int(desc_str[8:-1])
-                value_admitted[cid].append({"type": "CONST", "c": c})
-            elif desc_str.startswith("UNIQUE(c="):
-                c = int(desc_str[9:-1])
-                value_admitted[cid].append({"type": "UNIQUE", "c": c})
-            elif desc_str.startswith("ARGMAX(c="):
-                c = int(desc_str[9:-1])
-                value_admitted[cid].append({"type": "ARGMAX", "c": c})
-            elif desc_str.startswith("LOWEST_UNUSED(c="):
-                c = int(desc_str[16:-1])
-                value_admitted[cid].append({"type": "LOWEST_UNUSED", "c": c})
-            elif desc_str.startswith("RECOLOR(pi={"):
-                pi_str = desc_str[12:-2]
-                pi = {}
-                for part in pi_str.split(","):
-                    k, v = part.split(":")
-                    pi[int(k)] = int(v)
-                value_admitted[cid].append({"pi": pi})
-            elif desc_str.startswith("BLOCK(k="):
-                k = int(desc_str[8:-1])
-                value_admitted[cid].append({"type": "BLOCK", "k": k})
 
-    # 7. Build class_map and run sieve
-    sieve.init()
+        # Store descriptor objects for sieve
+        value_admitted[cid] = admitted
 
-    # Build class maps for all training pairs (iterate by sorted orig_i)
-    class_maps = []
-    for orig_i in sorted(P_out_by_id.keys()):
-        # Find the presented output for this orig_i
-        Y_i = next(Y for oid, Y in Yout_with_ids if oid == orig_i)
-        H_out = len(Y_i)
-        W_out = len(Y_i[0]) if H_out > 0 else 0
-        cm = class_map.build_class_map_i(H_out, W_out, P_test, P_out_by_id[orig_i], Q)
-        class_maps.append(cm)
+        # Format descriptor strings for receipt
+        def format_value_desc(desc):
+            vtype = desc.get("type", "UNKNOWN")
+            if vtype in ["CONST", "UNIQUE", "ARGMAX", "LOWEST_UNUSED"]:
+                return f"{vtype}(c={desc['c']})"
+            elif vtype == "RECOLOR":
+                pi_str = ",".join(f"{k}→{v}" for k, v in sorted(desc["pi"].items()))
+                return f"RECOLOR(π={{{pi_str}}})"
+            elif vtype == "BLOCK":
+                return f"BLOCK(k={desc['k']})"
+            return str(desc)
 
-    # Run sieve (uses sorted lists for sequential iteration)
+        # Collect receipt
+        value_receipts.append({
+            "class_id": cid,
+            "admitted_value": [format_value_desc(a) for a in admitted],
+            "count": len(admitted),
+            "trains_checked": admitted[0]["_proof"]["trains_checked"] if admitted else len(Xin_presented)
+        })
+
+    # Log all VALUE admissions together
+    receipts.log("laws_value", {"classes": value_receipts})
+
+    # 9. Section D: Sieve (WO-LAW-CORE)
     sieve_result = sieve.run_sieve(
         Q, class_maps, Xin_presented, Yout_presented,
-        P_test, P_in_list, P_out_list,
-        keep_admitted, value_admitted
+        P_test, P_in_list, P_out_list, keep_admitted, value_admitted
     )
+
+    # Log sieve result
+    receipts.log("sieve", {
+        "status": sieve_result["status"],
+        "assignment": sieve_result.get("assignment", {}),
+        "prune_count": len(sieve_result.get("prune_log", [])),
+        "missing_count": len(sieve_result.get("missing", []))
+    })
+
+    if sieve_result["status"] == "missing_descriptor":
+        # Return missing status with witnesses
+        doc = receipts.finalize()
+        return {
+            "task_id": task_id,
+            "status": "missing_descriptor",
+            "missing": sieve_result.get("missing", []),
+            "receipts": doc
+        }
+
+    # TODO: Section E (paint) will be implemented next
+    # For now, return truth_pass_missing_law to test Sections A+B+C+D
+    return {
+        "task_id": task_id,
+        "status": "sieve_pass",
+        "receipts": receipts.finalize()
+    }
 
     if sieve_result["status"] == "missing_descriptor":
         # Return missing status with witnesses

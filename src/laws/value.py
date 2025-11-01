@@ -713,6 +713,400 @@ def _try_block(
 # ============================================================================
 
 
+def admit_value_for_class_v2(
+    cid: int,
+    class_pixels_test: List[Coord],
+    class_maps: List[List[Optional[int]]],
+    Xin: List[IntGrid],
+    Yout: List[IntGrid],
+    Xtest: IntGrid,
+    P_test: Frame,
+    P_in_list: List[Frame],
+    P_out_list: List[Frame]
+) -> List[Dict[str, Any]]:
+    """
+    Admit VALUE laws for this class using class_maps.
+
+    Args:
+        cid: Class id
+        class_pixels_test: Test frame pixels for this class
+        class_maps: List of class maps (one per training pair)
+        Xin: Posed+anchored train inputs
+        Yout: Posed-only train outputs
+        Xtest: Test input (posed+anchored)
+        P_test: Test frame
+        P_in_list: Train input frames
+        P_out_list: Train output frames
+
+    Returns:
+        List of admitted descriptors with proofs
+    """
+    admitted = []
+
+    # Helper: get observed pixels from class_map_i
+    def get_obs_from_class_map(class_map_i, Yout_i):
+        H_out = len(Yout_i)
+        W_out = len(Yout_i[0]) if H_out > 0 else 0
+        obs = []
+        for r in range(H_out):
+            for c in range(W_out):
+                p_idx = r * W_out + c
+                if p_idx < len(class_map_i) and class_map_i[p_idx] == cid:
+                    obs.append((r, c))
+        return obs
+
+    # 1. CONST
+    c_candidates = []
+    for i, (Yout_i, class_map_i) in enumerate(zip(Yout, class_maps)):
+        obs_i = get_obs_from_class_map(class_map_i, Yout_i)
+        if not obs_i:
+            continue
+        colors = set(Yout_i[p[0]][p[1]] for p in obs_i)
+        if len(colors) == 1:
+            c_candidates.append(list(colors)[0])
+        else:
+            c_candidates = []
+            break
+
+    if c_candidates and len(set(c_candidates)) == 1:
+        c = c_candidates[0]
+        # Verify proof
+        proof_ok = True
+        pixels_checked = 0
+        for i, (Yout_i, class_map_i) in enumerate(zip(Yout, class_maps)):
+            obs_i = get_obs_from_class_map(class_map_i, Yout_i)
+            for p in obs_i:
+                pixels_checked += 1
+                if Yout_i[p[0]][p[1]] != c:
+                    proof_ok = False
+                    break
+            if not proof_ok:
+                break
+
+        if proof_ok:
+            admitted.append({
+                "type": "CONST",
+                "c": c,
+                "_proof": {
+                    "trains_checked": len(Yout),
+                    "pixels_checked": pixels_checked
+                }
+            })
+
+    # 2. UNIQUE
+    c_candidates = []
+    for i, (Xin_i, Yout_i, P_in, class_map_i) in enumerate(zip(Xin, Yout, P_in_list, class_maps)):
+        class_in_i = get_class_in_i(class_pixels_test, Xin_i, P_test, P_in)
+
+        if not class_in_i:
+            continue
+
+        # Collect input colors on class
+        colors = set()
+        for p_in in class_in_i:
+            colors.add(Xin_i[p_in[0]][p_in[1]])
+
+        # Must be unique (singleton)
+        if len(colors) != 1:
+            c_candidates = []
+            break
+
+        c_candidates.append(list(colors)[0])
+
+    if c_candidates and len(set(c_candidates)) == 1:
+        c = c_candidates[0]
+        # Verify proof
+        proof_ok = True
+        pixels_checked = 0
+        for i, (Yout_i, class_map_i) in enumerate(zip(Yout, class_maps)):
+            obs_i = get_obs_from_class_map(class_map_i, Yout_i)
+            for p in obs_i:
+                pixels_checked += 1
+                if Yout_i[p[0]][p[1]] != c:
+                    proof_ok = False
+                    break
+            if not proof_ok:
+                break
+
+        if proof_ok:
+            admitted.append({
+                "type": "UNIQUE",
+                "c": c,
+                "_proof": {
+                    "trains_checked": len(Yout),
+                    "pixels_checked": pixels_checked
+                }
+            })
+
+    # 3. ARGMAX
+    c_candidates = []
+    for i, (Xin_i, Yout_i, P_in, class_map_i) in enumerate(zip(Xin, Yout, P_in_list, class_maps)):
+        class_in_i = get_class_in_i(class_pixels_test, Xin_i, P_test, P_in)
+
+        if not class_in_i:
+            continue
+
+        # Count colors
+        from collections import defaultdict
+        color_counts = defaultdict(int)
+        for p_in in class_in_i:
+            color_counts[Xin_i[p_in[0]][p_in[1]]] += 1
+
+        # ARGMAX: max count, tie-break by smallest color
+        max_count = max(color_counts.values())
+        candidates_argmax = [c for c, cnt in color_counts.items() if cnt == max_count]
+        c_i = min(candidates_argmax)  # Smallest color value
+
+        c_candidates.append(c_i)
+
+    if c_candidates and len(set(c_candidates)) == 1:
+        c = c_candidates[0]
+        # Verify proof
+        proof_ok = True
+        pixels_checked = 0
+        for i, (Yout_i, class_map_i) in enumerate(zip(Yout, class_maps)):
+            obs_i = get_obs_from_class_map(class_map_i, Yout_i)
+            for p in obs_i:
+                pixels_checked += 1
+                if Yout_i[p[0]][p[1]] != c:
+                    proof_ok = False
+                    break
+            if not proof_ok:
+                break
+
+        if proof_ok:
+            admitted.append({
+                "type": "ARGMAX",
+                "c": c,
+                "_proof": {
+                    "trains_checked": len(Yout),
+                    "pixels_checked": pixels_checked
+                }
+            })
+
+    # 4. LOWEST_UNUSED
+    c_candidates = []
+    for i, (Xin_i, Yout_i, P_in, class_map_i) in enumerate(zip(Xin, Yout, P_in_list, class_maps)):
+        class_in_i = get_class_in_i(class_pixels_test, Xin_i, P_test, P_in)
+
+        if not class_in_i:
+            continue
+
+        # Collect colors present
+        colors_present = set()
+        for p_in in class_in_i:
+            colors_present.add(Xin_i[p_in[0]][p_in[1]])
+
+        # Find lowest unused in 0..9
+        c_i = None
+        for c in range(10):
+            if c not in colors_present:
+                c_i = c
+                break
+
+        if c_i is None:
+            c_candidates = []
+            break
+
+        c_candidates.append(c_i)
+
+    if c_candidates and len(set(c_candidates)) == 1:
+        c = c_candidates[0]
+        # Verify proof
+        proof_ok = True
+        pixels_checked = 0
+        for i, (Yout_i, class_map_i) in enumerate(zip(Yout, class_maps)):
+            obs_i = get_obs_from_class_map(class_map_i, Yout_i)
+            for p in obs_i:
+                pixels_checked += 1
+                if Yout_i[p[0]][p[1]] != c:
+                    proof_ok = False
+                    break
+            if not proof_ok:
+                break
+
+        if proof_ok:
+            admitted.append({
+                "type": "LOWEST_UNUSED",
+                "c": c,
+                "_proof": {
+                    "trains_checked": len(Yout),
+                    "pixels_checked": pixels_checked
+                }
+            })
+
+    # 5. RECOLOR(π)
+    pi = {}  # cin → cout
+    conflicts = []
+
+    for i, (Xin_i, Yout_i, P_in, P_out, class_map_i) in enumerate(zip(Xin, Yout, P_in_list, P_out_list, class_maps)):
+        obs_i = get_obs_from_class_map(class_map_i, Yout_i)
+        op_out, anchor_out, shape_out = P_out
+
+        for p_out in obs_i:
+            # p_test = pose_inv(p_out, P_out)
+            p_test = morphisms.pose_inv(p_out, op_out, shape_out)
+
+            if p_test is None:
+                continue
+
+            # p_in = test_to_in(p_test, P_test, P_in)
+            p_in = test_to_in(p_test, P_test, P_in)
+
+            if p_in is None:
+                continue
+
+            # Check bounds
+            H_in = len(Xin_i)
+            W_in = len(Xin_i[0]) if H_in > 0 else 0
+            if not (0 <= p_in[0] < H_in and 0 <= p_in[1] < W_in):
+                continue
+
+            cin = Xin_i[p_in[0]][p_in[1]]
+            cout = Yout_i[p_out[0]][p_out[1]]
+
+            # Merge
+            if cin in pi:
+                if pi[cin] != cout:
+                    conflicts.append(cin)
+                    break
+            else:
+                pi[cin] = cout
+
+        if conflicts:
+            break
+
+    # Check conflicts
+    if not conflicts:
+        # Coverage: π must cover all colors in Xtest[class_pixels_test]
+        test_colors = set()
+        H_test = len(Xtest)
+        W_test = len(Xtest[0]) if H_test > 0 else 0
+
+        for p_test in class_pixels_test:
+            if 0 <= p_test[0] < H_test and 0 <= p_test[1] < W_test:
+                test_colors.add(Xtest[p_test[0]][p_test[1]])
+
+        missing = test_colors - set(pi.keys())
+
+        if not missing:
+            # Proof: π[cin] == Yout[i][p_out]
+            proof_ok = True
+            pixels_checked = 0
+
+            for i, (Xin_i, Yout_i, P_in, P_out, class_map_i) in enumerate(zip(Xin, Yout, P_in_list, P_out_list, class_maps)):
+                obs_i = get_obs_from_class_map(class_map_i, Yout_i)
+                op_out, anchor_out, shape_out = P_out
+
+                for p_out in obs_i:
+                    pixels_checked += 1
+                    p_test = morphisms.pose_inv(p_out, op_out, shape_out)
+                    if p_test is None:
+                        continue
+
+                    p_in = test_to_in(p_test, P_test, P_in)
+                    if p_in is None:
+                        continue
+
+                    H_in = len(Xin_i)
+                    W_in = len(Xin_i[0]) if H_in > 0 else 0
+                    if not (0 <= p_in[0] < H_in and 0 <= p_in[1] < W_in):
+                        continue
+
+                    cin = Xin_i[p_in[0]][p_in[1]]
+                    expected = pi.get(cin)
+                    actual = Yout_i[p_out[0]][p_out[1]]
+
+                    if expected != actual:
+                        proof_ok = False
+                        break
+
+                if not proof_ok:
+                    break
+
+            if proof_ok:
+                admitted.append({
+                    "type": "RECOLOR",
+                    "pi": dict(pi),
+                    "_proof": {
+                        "trains_checked": len(Yout),
+                        "pixels_checked": pixels_checked
+                    }
+                })
+
+    # 6. BLOCK(k) for k ∈ {2, 3}
+    for k in [2, 3]:
+        if not class_pixels_test:
+            continue
+
+        # Anchor: min in row-major
+        anchor = min(class_pixels_test)
+
+        proof_ok = True
+        pixels_checked = 0
+
+        for i, (Xin_i, Yout_i, P_in, P_out, class_map_i) in enumerate(zip(Xin, Yout, P_in_list, P_out_list, class_maps)):
+            obs_i = get_obs_from_class_map(class_map_i, Yout_i)
+            op_out, anchor_out, shape_out = P_out
+
+            H_in = len(Xin_i)
+            W_in = len(Xin_i[0]) if H_in > 0 else 0
+
+            for p_out in obs_i:
+                pixels_checked += 1
+                # q_test = pose_inv(p_out, P_out)
+                q_test = morphisms.pose_inv(p_out, op_out, shape_out)
+                if q_test is None:
+                    proof_ok = False
+                    break
+
+                # rel = q_test - anchor
+                rel_row = q_test[0] - anchor[0]
+                rel_col = q_test[1] - anchor[1]
+
+                # base = floor(rel / k)
+                base_row = rel_row // k
+                base_col = rel_col // k
+
+                # q0 = anchor + base
+                q0 = (anchor[0] + base_row, anchor[1] + base_col)
+
+                # p_in = test_to_in(q0, P_test, P_in)
+                p_in = test_to_in(q0, P_test, P_in)
+
+                if p_in is None:
+                    proof_ok = False
+                    break
+
+                # Check bounds
+                if not (0 <= p_in[0] < H_in and 0 <= p_in[1] < W_in):
+                    proof_ok = False
+                    break
+
+                xin = Xin_i[p_in[0]][p_in[1]]
+                yout = Yout_i[p_out[0]][p_out[1]]
+
+                if xin != yout:
+                    proof_ok = False
+                    break
+
+            if not proof_ok:
+                break
+
+        if proof_ok:
+            admitted.append({
+                "type": "BLOCK",
+                "k": k,
+                "_proof": {
+                    "trains_checked": len(Yout),
+                    "pixels_checked": pixels_checked,
+                    "anchor": list(anchor)
+                }
+            })
+
+    return admitted
+
+
 def admit_value_for_class(
     cid: int,
     class_pixels_test: List[Coord],
