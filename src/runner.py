@@ -221,7 +221,7 @@ def run_task(task_id: str, task_data: Dict) -> Dict[str, Any]:
         sizes.append((Hin, Win, Hout, Wout))
 
     try:
-        law_type, law = shape_law.learn_law(sizes)
+        law_type, law = shape_law.learn_law(sizes, grids=Xin_presented)
         shape = (law_type, law)
     except AssertionError as e:
         doc = receipts.finalize()

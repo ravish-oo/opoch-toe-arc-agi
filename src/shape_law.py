@@ -8,7 +8,7 @@ Pullback uses floor mapping with OOB-only skips.
 """
 
 import os
-from typing import List, Tuple, Literal, Optional
+from typing import List, Tuple, Literal, Optional, Any
 
 import receipts
 
@@ -16,9 +16,13 @@ import receipts
 SizeQuad = Tuple[int, int, int, int]  # (Hin, Win, Hout, Wout)
 Law = Tuple[int, int, int, int]  # (a, b, c, d)
 LawType = Literal["multiplicative", "additive", "mixed", "bbox"]
+Grid = List[List[int]]  # 2D grid of canonical colors
 
 
-def learn_law(sizes: List[SizeQuad]) -> Tuple[LawType, Law]:
+def learn_law(
+    sizes: List[SizeQuad],
+    grids: Optional[List[Grid]] = None
+) -> Tuple[LawType, Law]:
     """
     Fit the smallest-precedence law that matches ALL training size pairs.
 
@@ -26,6 +30,7 @@ def learn_law(sizes: List[SizeQuad]) -> Tuple[LawType, Law]:
 
     Args:
         sizes: List of (Hin, Win, Hout, Wout) from posed training pairs
+        grids: Optional list of posed input grids for bbox fallback
 
     Returns:
         (law_type, (a, b, c, d))
@@ -41,7 +46,7 @@ def learn_law(sizes: List[SizeQuad]) -> Tuple[LawType, Law]:
     if mult_law is not None:
         return ("multiplicative", mult_law)
 
-    # 2. Try additive: a=c=1, b and d constant ≥0
+    # 2. Try additive: a=c=1, b and d constant integers
     add_law = _try_additive(sizes)
     if add_law is not None:
         return ("additive", add_law)
@@ -51,8 +56,13 @@ def learn_law(sizes: List[SizeQuad]) -> Tuple[LawType, Law]:
     if mixed_law is not None:
         return ("mixed", mixed_law)
 
-    # 4. Bbox fallback (requires posed inputs, not available here)
-    # For now, raise; bbox will be handled when we have actual grids
+    # 4. Bbox fallback: if grids provided, try affine on bbox sizes
+    if grids is not None:
+        bbox_law = _try_bbox(sizes, grids)
+        if bbox_law is not None:
+            return ("bbox", bbox_law)
+
+    # No law found
     raise AssertionError(
         f"shape fit failed: no affine law matches all {len(sizes)} pairs. "
         f"First pair: {sizes[0]}"
@@ -109,9 +119,6 @@ def _try_additive(sizes: List[SizeQuad]) -> Optional[Law]:
     for Hin, Win, Hout, Wout in sizes:
         b_k = Hout - Hin
         d_k = Wout - Win
-
-        if b_k < 0 or d_k < 0:
-            return None
 
         b_candidates.append(b_k)
         d_candidates.append(d_k)
@@ -176,9 +183,6 @@ def _try_mixed(sizes: List[SizeQuad]) -> Optional[Law]:
         b_k = Hout - a * Hin
         d_k = Wout - c * Win
 
-        if b_k < 0 or d_k < 0:
-            return None
-
         b_candidates.append(b_k)
         d_candidates.append(d_k)
 
@@ -196,6 +200,83 @@ def _try_mixed(sizes: List[SizeQuad]) -> Optional[Law]:
         return None  # Additive
 
     return (a, b, c, d)
+
+
+def _compute_bbox(grid: Grid) -> Tuple[int, int]:
+    """
+    Compute bounding box size of non-zero pixels (foreground).
+
+    Args:
+        grid: 2D grid where 0 is background, non-zero is foreground
+
+    Returns:
+        (bbox_h, bbox_w): Height and width of bounding box
+    """
+    H = len(grid)
+    if H == 0:
+        return (0, 0)
+    W = len(grid[0]) if H > 0 else 0
+
+    min_i, max_i = H, -1
+    min_j, max_j = W, -1
+
+    for i in range(H):
+        for j in range(W):
+            if grid[i][j] != 0:  # Foreground pixel
+                min_i = min(min_i, i)
+                max_i = max(max_i, i)
+                min_j = min(min_j, j)
+                max_j = max(max_j, j)
+
+    # If no foreground pixels, return (0, 0)
+    if max_i == -1:
+        return (0, 0)
+
+    bbox_h = max_i - min_i + 1
+    bbox_w = max_j - min_j + 1
+    return (bbox_h, bbox_w)
+
+
+def _try_bbox(sizes: List[SizeQuad], grids: List[Grid]) -> Optional[Law]:
+    """
+    Try bbox fallback: compute bbox for each input, then fit affine to bbox sizes.
+
+    Args:
+        sizes: List of (Hin, Win, Hout, Wout)
+        grids: List of posed input grids
+
+    Returns:
+        (a, b, c, d) if affine law fits (bbox_h, bbox_w) -> (Hout, Wout), else None
+    """
+    if len(sizes) != len(grids):
+        return None
+
+    # Compute bbox for each grid
+    bbox_sizes = []
+    for grid in grids:
+        bbox_h, bbox_w = _compute_bbox(grid)
+        bbox_sizes.append((bbox_h, bbox_w))
+
+    # Build new size quads: (bbox_h, bbox_w, Hout, Wout)
+    bbox_quads = []
+    for i, (_, _, Hout, Wout) in enumerate(sizes):
+        bbox_h, bbox_w = bbox_sizes[i]
+        bbox_quads.append((bbox_h, bbox_w, Hout, Wout))
+
+    # Try affine laws on bbox sizes
+    bbox_mult = _try_multiplicative(bbox_quads)
+    if bbox_mult is not None:
+        return bbox_mult
+
+    bbox_add = _try_additive(bbox_quads)
+    if bbox_add is not None:
+        return bbox_add
+
+    bbox_mixed = _try_mixed(bbox_quads)
+    if bbox_mixed is not None:
+        return bbox_mixed
+
+    return None
 
 
 def pullback(i_out: int, j_out: int, law: Law, Hin: int, Win: int) -> Optional[Tuple[int, int]]:
